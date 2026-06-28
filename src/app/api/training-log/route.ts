@@ -25,7 +25,7 @@ export async function GET(request: Request) {
       rows = createTrainingRowsFromState({
         config: normalizeConfig(payload.config),
         state: payload.state,
-      });
+      }).slice(-(limit ?? Number.MAX_SAFE_INTEGER));
     }
   }
 
