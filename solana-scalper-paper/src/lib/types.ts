@@ -1,0 +1,159 @@
+export type DiscoveryMode =
+  | "latest-profiles"
+  | "latest-boosts"
+  | "top-boosts"
+  | "watchlist";
+
+export type TradeExitReason =
+  | "take-profit"
+  | "stop-loss"
+  | "trailing-stop"
+  | "max-hold";
+
+export type ActivityKind =
+  | "scan"
+  | "entry"
+  | "exit"
+  | "skip"
+  | "error"
+  | "state";
+
+export interface BotConfig {
+  startingCashSol: number;
+  tradeSizeSol: number;
+  maxOpenPositions: number;
+  maxNewPositionsPerTick: number;
+  takeProfitNetPct: number;
+  stopLossNetPct: number;
+  trailingActivationPct: number;
+  trailingDrawdownPct: number;
+  maxHoldMinutes: number;
+  cooldownMinutes: number;
+  tickIntervalSeconds: number;
+  slippageBps: number;
+  priorityFeeLamports: number;
+  baseSignatureFeeLamports: number;
+  maxPriceImpactPct: number;
+  minLiquidityUsd: number;
+  maxLiquidityUsd: number;
+  minVolumeM5Usd: number;
+  minAgeMinutes: number;
+  maxAgeHours: number;
+  minBuySellRatioM5: number;
+  minBuysM5: number;
+  candidateLimit: number;
+  discoveryMode: DiscoveryMode;
+  watchlist: string[];
+  restrictIntermediateTokens: boolean;
+  dexscreenerBaseUrl: string;
+  jupiterQuoteUrl: string;
+}
+
+export interface MarketCandidate {
+  id: string;
+  tokenAddress: string;
+  chainId: string;
+  pairAddress?: string;
+  dexId?: string;
+  url?: string;
+  symbol: string;
+  name: string;
+  quoteSymbol?: string;
+  quoteAddress?: string;
+  priceUsd: number;
+  liquidityUsd: number;
+  marketCapUsd: number;
+  fdvUsd: number;
+  volumeM5Usd: number;
+  volumeH1Usd: number;
+  volumeH24Usd: number;
+  buysM5: number;
+  sellsM5: number;
+  priceChangeM5Pct: number;
+  priceChangeH1Pct: number;
+  pairAgeMinutes: number;
+  source: string;
+  score: number;
+  reasons: string[];
+}
+
+export interface ActivityEvent {
+  id: string;
+  at: string;
+  kind: ActivityKind;
+  message: string;
+}
+
+export interface PaperPosition {
+  id: string;
+  tokenAddress: string;
+  pairAddress?: string;
+  symbol: string;
+  name: string;
+  sourceUrl?: string;
+  openedAt: string;
+  entrySol: number;
+  entryFeeSol: number;
+  entryTotalCostSol: number;
+  tokenRawAmount: string;
+  entryPriceImpactPct: number;
+  entryScore: number;
+  currentExitSol: number;
+  currentNetPnlSol: number;
+  currentNetPnlPct: number;
+  peakNetPnlPct: number;
+  lastQuoteAt?: string;
+  lastError?: string;
+}
+
+export interface ClosedTrade extends PaperPosition {
+  closedAt: string;
+  exitReason: TradeExitReason;
+  exitSol: number;
+  exitFeeSol: number;
+  netPnlSol: number;
+  netPnlPct: number;
+  holdMinutes: number;
+}
+
+export interface EquityPoint {
+  at: string;
+  equitySol: number;
+  cashSol: number;
+}
+
+export interface BotState {
+  initializedAt: string;
+  updatedAt: string;
+  cashSol: number;
+  openPositions: PaperPosition[];
+  closedTrades: ClosedTrade[];
+  activity: ActivityEvent[];
+  equityCurve: EquityPoint[];
+  cooldowns: Record<string, string>;
+  tickCount: number;
+}
+
+export interface TickResult {
+  ok: boolean;
+  storageConfigured: boolean;
+  storageSaved: boolean;
+  config: BotConfig;
+  state: BotState;
+  candidates: MarketCandidate[];
+  summary: {
+    scanned: number;
+    opened: number;
+    closed: number;
+    skipped: number;
+    errors: number;
+    equitySol: number;
+    realizedPnlSol: number;
+    openPnlSol: number;
+  };
+}
+
+export interface StoredPayload {
+  config: BotConfig;
+  state: BotState;
+}
