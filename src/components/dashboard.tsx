@@ -38,6 +38,7 @@ type ApiStateResponse = {
 };
 
 const LOCAL_KEY = "solana-scalper-paper:v1";
+const RUNNING_KEY = "solana-scalper-paper:engine-running";
 
 export function Dashboard() {
   const [config, setConfig] = useState<BotConfig>(DEFAULT_CONFIG);
@@ -46,6 +47,7 @@ export function Dashboard() {
   const [summary, setSummary] = useState<TickResult["summary"] | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [isTicking, setIsTicking] = useState(false);
+  const [hasLoadedPreferences, setHasLoadedPreferences] = useState(false);
   const [storageConfigured, setStorageConfigured] = useState(false);
   const [saveCloudState, setSaveCloudState] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +58,8 @@ export function Dashboard() {
       const localPayload = readLocalPayload();
       setConfig(localPayload.config);
       setState(localPayload.state);
+      setIsRunning(readLocalRunningState());
+      setHasLoadedPreferences(true);
     }, 0);
 
     void fetch("/api/state")
@@ -82,6 +86,14 @@ export function Dashboard() {
       }),
     );
   }, [config, state]);
+
+  useEffect(() => {
+    if (!hasLoadedPreferences) {
+      return;
+    }
+
+    window.localStorage.setItem(RUNNING_KEY, isRunning ? "1" : "0");
+  }, [hasLoadedPreferences, isRunning]);
 
   const metrics = useMemo(() => {
     const equitySol =
@@ -151,7 +163,7 @@ export function Dashboard() {
   }, [config, isTicking, saveCloudState, state]);
 
   useEffect(() => {
-    if (!isRunning) {
+    if (!hasLoadedPreferences || !isRunning) {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
@@ -168,7 +180,7 @@ export function Dashboard() {
         clearInterval(intervalRef.current);
       }
     };
-  }, [config.tickIntervalSeconds, isRunning, runTick]);
+  }, [config.tickIntervalSeconds, hasLoadedPreferences, isRunning, runTick]);
 
   function updateConfig<K extends keyof BotConfig>(key: K, value: BotConfig[K]) {
     setConfig((current) => ({
@@ -525,6 +537,14 @@ export function Dashboard() {
       </div>
     </main>
   );
+}
+
+function readLocalRunningState(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return window.localStorage.getItem(RUNNING_KEY) === "1";
 }
 
 function readLocalPayload(): ApiStateResponse["payload"] {
