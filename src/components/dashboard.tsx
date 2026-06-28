@@ -39,6 +39,7 @@ type ApiStateResponse = {
 
 const LOCAL_KEY = "solana-scalper-paper:v1";
 const RUNNING_KEY = "solana-scalper-paper:engine-running";
+const DASHBOARD_REFRESH_MS = 5_000;
 
 export function Dashboard() {
   const [config, setConfig] = useState<BotConfig>(DEFAULT_CONFIG);
@@ -52,6 +53,40 @@ export function Dashboard() {
   const [saveCloudState, setSaveCloudState] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const refreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isRunningRef = useRef(isRunning);
+  const isTickingRef = useRef(isTicking);
+
+  const syncCloudState = useCallback(async () => {
+    if (isTickingRef.current) {
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/state", { cache: "no-store" });
+      const data = (await response.json()) as ApiStateResponse;
+
+      setStorageConfigured(data.storageConfigured);
+
+      if (data.storageConfigured && data.payload) {
+        setState(data.payload.state);
+        setConfig((currentConfig) =>
+          isRunningRef.current ? currentConfig : data.payload.config,
+        );
+        setSaveCloudState(true);
+      }
+    } catch {
+      // Keep the current dashboard state when a refresh request is briefly unavailable.
+    }
+  }, []);
+
+  useEffect(() => {
+    isRunningRef.current = isRunning;
+  }, [isRunning]);
+
+  useEffect(() => {
+    isTickingRef.current = isTicking;
+  }, [isTicking]);
 
   useEffect(() => {
     const localLoad = window.setTimeout(() => {
@@ -62,20 +97,15 @@ export function Dashboard() {
       setHasLoadedPreferences(true);
     }, 0);
 
-    void fetch("/api/state")
-      .then((response) => response.json() as Promise<ApiStateResponse>)
-      .then((data) => {
-        setStorageConfigured(data.storageConfigured);
-        if (data.storageConfigured && data.payload) {
-          setConfig(data.payload.config);
-          setState(data.payload.state);
-          setSaveCloudState(true);
-        }
-      })
-      .catch(() => undefined);
+    const cloudLoad = window.setTimeout(() => {
+      void syncCloudState();
+    }, 0);
 
-    return () => window.clearTimeout(localLoad);
-  }, []);
+    return () => {
+      window.clearTimeout(localLoad);
+      window.clearTimeout(cloudLoad);
+    };
+  }, [syncCloudState]);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -181,6 +211,23 @@ export function Dashboard() {
       }
     };
   }, [config.tickIntervalSeconds, hasLoadedPreferences, isRunning, runTick]);
+
+  useEffect(() => {
+    if (!hasLoadedPreferences) {
+      return;
+    }
+
+    refreshRef.current = setInterval(() => {
+      void syncCloudState();
+    }, DASHBOARD_REFRESH_MS);
+
+    return () => {
+      if (refreshRef.current) {
+        clearInterval(refreshRef.current);
+        refreshRef.current = null;
+      }
+    };
+  }, [hasLoadedPreferences, syncCloudState]);
 
   function updateConfig<K extends keyof BotConfig>(key: K, value: BotConfig[K]) {
     setConfig((current) => ({

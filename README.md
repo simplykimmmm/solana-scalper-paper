@@ -20,6 +20,7 @@ Open [http://localhost:3000](http://localhost:3000).
 - Models conservative fills using `otherAmountThreshold` where Jupiter returns it.
 - Subtracts configurable base signature fees and priority fees from PnL.
 - Runs from the browser dashboard or a server-side `/api/tick` endpoint.
+- Refreshes cloud dashboard state every 5 seconds while the page is open.
 - Stores state in browser local storage by default.
 - Optionally persists server-side state in Upstash Redis REST for cloud scheduler ticks.
 
