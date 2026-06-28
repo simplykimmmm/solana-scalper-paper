@@ -30,11 +30,16 @@ repository root, so leave Vercel's root directory setting as `/`.
 
 Free mode works with no env vars while the dashboard tab is open.
 
-For cloud-persisted server ticks, create a free Upstash Redis database and add:
+For cloud-persisted server ticks, create a free Upstash Redis database. The
+Vercel Marketplace integration may add `KV_REST_API_URL` and
+`KV_REST_API_TOKEN` automatically; the app also supports the direct Upstash
+names below.
 
 ```text
 UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
+KV_REST_API_URL=
+KV_REST_API_TOKEN=
 UPSTASH_REDIS_KEY=solana-scalper-paper:v1
 CRON_SECRET=
 ```

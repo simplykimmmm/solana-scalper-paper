@@ -3,9 +3,7 @@ import type { StoredPayload } from "./types";
 const STORAGE_KEY = process.env.UPSTASH_REDIS_KEY || "solana-scalper-paper:v1";
 
 export function isCloudStorageConfigured(): boolean {
-  return Boolean(
-    process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN,
-  );
+  return Boolean(getRedisRestUrl() && getRedisRestToken());
 }
 
 export async function readCloudPayload(): Promise<StoredPayload | null> {
@@ -31,11 +29,13 @@ export async function writeCloudPayload(payload: StoredPayload): Promise<void> {
 }
 
 async function upstashCommand<T>(command: unknown[]): Promise<T> {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  const url = getRedisRestUrl();
+  const token = getRedisRestToken();
 
   if (!url || !token) {
-    throw new Error("Upstash Redis REST env vars are not configured.");
+    throw new Error(
+      "Upstash Redis REST env vars are not configured. Set UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN or KV_REST_API_URL/KV_REST_API_TOKEN.",
+    );
   }
 
   const response = await fetch(url, {
@@ -55,4 +55,12 @@ async function upstashCommand<T>(command: unknown[]): Promise<T> {
   }
 
   return data.result as T;
+}
+
+function getRedisRestUrl(): string | undefined {
+  return process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+}
+
+function getRedisRestToken(): string | undefined {
+  return process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
 }
