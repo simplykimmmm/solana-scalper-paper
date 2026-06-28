@@ -1,6 +1,7 @@
 import { createInitialState, normalizeConfig } from "@/lib/defaults";
 import { runPaperTick } from "@/lib/engine";
 import {
+  appendCloudTrainingRows,
   isCloudStorageConfigured,
   readCloudPayload,
   writeCloudPayload,
@@ -27,6 +28,7 @@ export async function POST(request: Request) {
       config: result.config,
       state: result.state,
     });
+    await appendCloudTrainingRows(result.trainingRows);
     result.storageSaved = true;
   }
 
@@ -65,6 +67,7 @@ export async function GET(request: Request) {
     config: result.config,
     state: result.state,
   });
+  await appendCloudTrainingRows(result.trainingRows);
   result.storageSaved = true;
 
   return Response.json(result);

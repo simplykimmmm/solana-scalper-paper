@@ -21,6 +21,7 @@ Open [http://localhost:3000](http://localhost:3000).
 - Subtracts configurable base signature fees and priority fees from PnL.
 - Runs from the browser dashboard or a server-side `/api/tick` endpoint.
 - Refreshes cloud dashboard state every 5 seconds while the page is open.
+- Appends scan, entry, exit, win, and loss rows to an AI-ready JSONL log.
 - Stores state in browser local storage by default.
 - Optionally persists server-side state in Upstash Redis REST for cloud scheduler ticks.
 
@@ -59,6 +60,25 @@ Authorization: Bearer YOUR_CRON_SECRET
 ```
 
 That server-side path requires Upstash env vars.
+
+## AI Training Export
+
+Every saved tick appends structured rows to an Upstash list named
+`solana-scalper-paper:v1:training-log` by default. Download it from the
+dashboard database icon or directly:
+
+```text
+GET https://YOUR_APP.vercel.app/api/training-log
+```
+
+The file is JSONL (`.jsonl`), one event per line. Rows include scan candidates,
+entries, exits, win/loss outcome, PnL, hold time, account snapshot, and the active
+strategy settings. Optional env vars:
+
+```text
+UPSTASH_REDIS_TRAINING_LOG_KEY=
+TRAINING_LOG_MAX_ROWS=20000
+```
 
 ## Default Strategy
 

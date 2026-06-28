@@ -116,6 +116,90 @@ export interface ClosedTrade extends PaperPosition {
   holdMinutes: number;
 }
 
+export type TrainingLogEventType = "scan" | "entry" | "exit" | "skip" | "error";
+export type TradeOutcome = "win" | "loss" | "flat";
+
+export interface CandidateTrainingSnapshot {
+  id: string;
+  tokenAddress: string;
+  chainId: string;
+  pairAddress?: string;
+  dexId?: string;
+  url?: string;
+  symbol: string;
+  name: string;
+  quoteSymbol?: string;
+  quoteAddress?: string;
+  priceUsd: number;
+  liquidityUsd: number;
+  marketCapUsd: number;
+  fdvUsd: number;
+  volumeM5Usd: number;
+  volumeH1Usd: number;
+  volumeH24Usd: number;
+  buysM5: number;
+  sellsM5: number;
+  priceChangeM5Pct: number;
+  priceChangeH1Pct: number;
+  pairAgeMinutes: number;
+  source: string;
+  score: number;
+  reasons: string[];
+}
+
+export interface TradeTrainingSnapshot {
+  id: string;
+  tokenAddress: string;
+  pairAddress?: string;
+  symbol: string;
+  name: string;
+  sourceUrl?: string;
+  openedAt: string;
+  closedAt?: string;
+  entrySol: number;
+  entryFeeSol: number;
+  entryTotalCostSol: number;
+  entryPriceImpactPct: number;
+  entryScore: number;
+  currentExitSol: number;
+  currentNetPnlSol: number;
+  currentNetPnlPct: number;
+  peakNetPnlPct: number;
+  exitReason?: TradeExitReason;
+  exitSol?: number;
+  exitFeeSol?: number;
+  netPnlSol?: number;
+  netPnlPct?: number;
+  holdMinutes?: number;
+}
+
+export interface AccountTrainingSnapshot {
+  cashSol: number;
+  equitySol: number;
+  openPositions: number;
+  closedTrades: number;
+  realizedPnlSol: number;
+  openPnlSol: number;
+}
+
+export interface TrainingLogRow {
+  id: string;
+  at: string;
+  tick: number;
+  type: TrainingLogEventType;
+  message?: string;
+  outcome?: TradeOutcome;
+  config: BotConfig;
+  account: AccountTrainingSnapshot;
+  scan?: {
+    candidates: CandidateTrainingSnapshot[];
+    count: number;
+  };
+  candidate?: CandidateTrainingSnapshot;
+  trade?: TradeTrainingSnapshot;
+  error?: string;
+}
+
 export interface EquityPoint {
   at: string;
   equitySol: number;
@@ -141,6 +225,7 @@ export interface TickResult {
   config: BotConfig;
   state: BotState;
   candidates: MarketCandidate[];
+  trainingRows: TrainingLogRow[];
   summary: {
     scanned: number;
     opened: number;

@@ -5,6 +5,7 @@ import {
   BarChart3,
   CircleDollarSign,
   Cloud,
+  Database,
   Download,
   Pause,
   Play,
@@ -25,6 +26,7 @@ import type {
   ClosedTrade,
   MarketCandidate,
   PaperPosition,
+  TrainingLogRow,
   TickResult,
 } from "@/lib/types";
 
@@ -39,7 +41,9 @@ type ApiStateResponse = {
 
 const LOCAL_KEY = "solana-scalper-paper:v1";
 const RUNNING_KEY = "solana-scalper-paper:engine-running";
+const TRAINING_LOG_LOCAL_KEY = "solana-scalper-paper:training-log";
 const DASHBOARD_REFRESH_MS = 5_000;
+const TRAINING_LOG_LOCAL_LIMIT = 20_000;
 
 export function Dashboard() {
   const [config, setConfig] = useState<BotConfig>(DEFAULT_CONFIG);
@@ -184,6 +188,7 @@ export function Dashboard() {
       setCandidates(result.candidates);
       setSummary(result.summary);
       setStorageConfigured(result.storageConfigured);
+      appendLocalTrainingRows(result.trainingRows);
     } catch (tickError) {
       setError(tickError instanceof Error ? tickError.message : "Tick failed.");
       setIsRunning(false);
@@ -270,6 +275,37 @@ export function Dashboard() {
     URL.revokeObjectURL(url);
   }
 
+  async function exportTrainingLog() {
+    if (storageConfigured) {
+      try {
+        const response = await fetch("/api/training-log", { cache: "no-store" });
+
+        if (!response.ok) {
+          throw new Error("Training log export failed.");
+        }
+
+        downloadBlob(
+          await response.blob(),
+          getDownloadFilename(response) || trainingLogFilename(),
+        );
+        return;
+      } catch (exportError) {
+        setError(
+          exportError instanceof Error
+            ? exportError.message
+            : "Training log export failed.",
+        );
+      }
+    }
+
+    downloadBlob(
+      new Blob([trainingRowsToJsonl(readLocalTrainingRows())], {
+        type: "application/x-ndjson;charset=utf-8",
+      }),
+      trainingLogFilename(),
+    );
+  }
+
   return (
     <main className="min-h-screen bg-[#f4f6f1] text-[#151711]">
       <header className="border-b border-[#d7dccd] bg-[#fbfcf8]">
@@ -312,6 +348,12 @@ export function Dashboard() {
             </IconButton>
             <IconButton label="Export JSON" onClick={exportState}>
               <Download size={18} />
+            </IconButton>
+            <IconButton
+              label="Export AI training log"
+              onClick={() => void exportTrainingLog()}
+            >
+              <Database size={18} />
             </IconButton>
             <IconButton label="Reset paper account" onClick={resetState} tone="red">
               <RotateCcw size={18} />
@@ -616,6 +658,72 @@ function readLocalPayload(): ApiStateResponse["payload"] {
     window.localStorage.removeItem(LOCAL_KEY);
     return fallback;
   }
+}
+
+function appendLocalTrainingRows(rows: TrainingLogRow[]) {
+  if (typeof window === "undefined" || rows.length === 0) {
+    return;
+  }
+
+  const nextRows = [...readLocalTrainingRows(), ...rows].slice(
+    -TRAINING_LOG_LOCAL_LIMIT,
+  );
+  window.localStorage.setItem(
+    TRAINING_LOG_LOCAL_KEY,
+    JSON.stringify(nextRows),
+  );
+}
+
+function readLocalTrainingRows(): TrainingLogRow[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  const local = window.localStorage.getItem(TRAINING_LOG_LOCAL_KEY);
+
+  if (!local) {
+    return [];
+  }
+
+  try {
+    const rows = JSON.parse(local) as unknown;
+    return Array.isArray(rows) ? (rows as TrainingLogRow[]) : [];
+  } catch {
+    window.localStorage.removeItem(TRAINING_LOG_LOCAL_KEY);
+    return [];
+  }
+}
+
+function trainingRowsToJsonl(rows: TrainingLogRow[]): string {
+  if (rows.length === 0) {
+    return "";
+  }
+
+  return `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`;
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function getDownloadFilename(response: Response): string | null {
+  const disposition = response.headers.get("content-disposition");
+
+  if (!disposition) {
+    return null;
+  }
+
+  const match = disposition.match(/filename="?([^"]+)"?/i);
+  return match?.[1] || null;
+}
+
+function trainingLogFilename(): string {
+  return `solana-scalper-training-${Date.now()}.jsonl`;
 }
 
 function createHydrationState(): BotState {

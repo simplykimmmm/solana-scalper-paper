@@ -13,6 +13,13 @@ import {
   solToLamportsString,
   SOL_MINT,
 } from "./jupiter";
+import {
+  createEntryTrainingRow,
+  createErrorTrainingRow,
+  createExitTrainingRow,
+  createScanTrainingRow,
+  createSkipTrainingRow,
+} from "./training-log";
 import type {
   BotConfig,
   BotState,
@@ -21,6 +28,7 @@ import type {
   PaperPosition,
   TickResult,
   TradeExitReason,
+  TrainingLogRow,
 } from "./types";
 
 export async function runPaperTick(input: {
@@ -33,6 +41,8 @@ export async function runPaperTick(input: {
   const state = input.state ? cloneState(input.state) : createInitialState(config);
   const activity = [...state.activity];
   const candidates: MarketCandidate[] = [];
+  const trainingRows: TrainingLogRow[] = [];
+  const closedTradesThisTick: ClosedTrade[] = [];
   let opened = 0;
   let closed = 0;
   let skipped = 0;
@@ -55,6 +65,7 @@ export async function runPaperTick(input: {
       if (reason) {
         const closedTrade = closePosition(marked, config, reason);
         state.closedTrades.unshift(closedTrade);
+        closedTradesThisTick.push(closedTrade);
         state.cooldowns[marked.tokenAddress] = new Date().toISOString();
         state.cashSol += closedTrade.exitSol - closedTrade.exitFeeSol;
         closed += 1;
@@ -81,10 +92,29 @@ export async function runPaperTick(input: {
           `${position.symbol} exit quote failed: ${getErrorMessage(error)}`,
         ),
       );
+      trainingRows.push(
+        createErrorTrainingRow({
+          tick: state.tickCount,
+          config,
+          state,
+          message: `${position.symbol} exit quote failed.`,
+          error: getErrorMessage(error),
+        }),
+      );
     }
   }
 
   state.openPositions = markedPositions;
+  for (const closedTrade of closedTradesThisTick) {
+    trainingRows.push(
+      createExitTrainingRow({
+        tick: state.tickCount,
+        config,
+        state,
+        trade: closedTrade,
+      }),
+    );
+  }
 
   const slots = Math.min(
     config.maxOpenPositions - state.openPositions.length,
@@ -96,6 +126,14 @@ export async function runPaperTick(input: {
       candidates.push(...(await scanDexScreener(config)));
       activity.unshift(
         createActivity("scan", `Scanner returned ${candidates.length} candidates.`),
+      );
+      trainingRows.push(
+        createScanTrainingRow({
+          tick: state.tickCount,
+          config,
+          state,
+          candidates,
+        }),
       );
 
       for (const candidate of candidates) {
@@ -109,17 +147,44 @@ export async function runPaperTick(input: {
           )
         ) {
           skipped += 1;
+          trainingRows.push(
+            createSkipTrainingRow({
+              tick: state.tickCount,
+              config,
+              state,
+              candidate,
+              message: `${candidate.symbol} skipped: already open.`,
+            }),
+          );
           continue;
         }
 
         if (isCoolingDown(candidate.tokenAddress, state, config)) {
           skipped += 1;
+          trainingRows.push(
+            createSkipTrainingRow({
+              tick: state.tickCount,
+              config,
+              state,
+              candidate,
+              message: `${candidate.symbol} skipped: cooldown active.`,
+            }),
+          );
           continue;
         }
 
         if (state.cashSol < config.tradeSizeSol + estimatedTxFeeSol(config)) {
           activity.unshift(
             createActivity("skip", "Cash is below the next paper trade size."),
+          );
+          trainingRows.push(
+            createSkipTrainingRow({
+              tick: state.tickCount,
+              config,
+              state,
+              candidate,
+              message: "Cash is below the next paper trade size.",
+            }),
           );
           break;
         }
@@ -137,6 +202,15 @@ export async function runPaperTick(input: {
               )} SOL, impact ${position.entryPriceImpactPct.toFixed(2)}%.`,
             ),
           );
+          trainingRows.push(
+            createEntryTrainingRow({
+              tick: state.tickCount,
+              config,
+              state,
+              candidate,
+              position,
+            }),
+          );
         } catch (error) {
           errors += 1;
           activity.unshift(
@@ -145,6 +219,15 @@ export async function runPaperTick(input: {
               `${candidate.symbol} skipped: ${getErrorMessage(error)}`,
             ),
           );
+          trainingRows.push(
+            createSkipTrainingRow({
+              tick: state.tickCount,
+              config,
+              state,
+              candidate,
+              message: `${candidate.symbol} skipped: ${getErrorMessage(error)}`,
+            }),
+          );
         }
       }
     } catch (error) {
@@ -152,9 +235,26 @@ export async function runPaperTick(input: {
       activity.unshift(
         createActivity("error", `Scanner failed: ${getErrorMessage(error)}`),
       );
+      trainingRows.push(
+        createErrorTrainingRow({
+          tick: state.tickCount,
+          config,
+          state,
+          message: "Scanner failed.",
+          error: getErrorMessage(error),
+        }),
+      );
     }
   } else {
     activity.unshift(createActivity("skip", "No entry slot or cash available."));
+    trainingRows.push(
+      createSkipTrainingRow({
+        tick: state.tickCount,
+        config,
+        state,
+        message: "No entry slot or cash available.",
+      }),
+    );
   }
 
   const equitySol = calculateEquitySol(state);
@@ -174,6 +274,7 @@ export async function runPaperTick(input: {
     config,
     state,
     candidates,
+    trainingRows,
     summary: {
       scanned: candidates.length,
       opened,
