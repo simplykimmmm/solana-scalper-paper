@@ -69,6 +69,8 @@ There are now two cloud runners:
 1. **Always-on worker**: use this for the real 10-second paper loop.
 2. **Vercel Cron**: use this as a cloud fallback. It runs from Vercel production,
    not from the browser, but cron timing is minute-level rather than continuous.
+3. **Cloudflare Worker Cron**: no-card fallback that runs once per minute and
+   calls `/api/tick` 6 times with 10 seconds between calls.
 
 Both runners use the same Upstash state and a Redis tick lock, so overlapping
 cloud ticks skip instead of double-opening positions.
@@ -123,6 +125,30 @@ Authorization: Bearer YOUR_CRON_SECRET
 
 If your Vercel plan does not allow every-minute cron, use the Render worker as
 the primary runner and remove or lower the cron schedule.
+
+### Cloudflare Worker No-Card Fallback
+
+The repo includes `cloudflare-worker/`, which can be deployed to Cloudflare
+Workers Cron. It does not need Render and does not run on your PC.
+
+```bash
+cd cloudflare-worker
+npx wrangler login
+npx wrangler secret put CRON_SECRET
+npx wrangler deploy
+```
+
+Defaults in `cloudflare-worker/wrangler.jsonc`:
+
+```text
+PAPER_TICK_URL=https://solana-scalper-paper.vercel.app/api/tick
+TICKS_PER_RUN=6
+DELAY_SECONDS=10
+```
+
+This gives near-10-second paper ticks from Cloudflare, while the main app's
+Redis lock prevents overlapping Vercel/GitHub/Cloudflare runners from
+double-writing state.
 
 The repo also includes `.github/workflows/cloud-paper-tick.yml`, which runs from
 GitHub Actions every 5 minutes and, by default, calls the production `/api/tick`
@@ -208,4 +234,5 @@ If paper trading is positive and you want to discuss a live build, use a dedicat
 - Solana priority fees RPC: https://solana.com/docs/rpc/http/getrecentprioritizationfees
 - Vercel cron jobs: https://vercel.com/docs/cron-jobs
 - Render Blueprint spec: https://render.com/docs/blueprint-spec
+- Cloudflare Workers Cron Triggers: https://developers.cloudflare.com/workers/configuration/cron-triggers/
 - Upstash Redis REST API: https://upstash.com/docs/redis/features/restapi

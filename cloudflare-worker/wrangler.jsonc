@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "solana-scalper-paper-ticker",
+  "main": "src/index.js",
+  "compatibility_date": "2026-06-29",
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "vars": {
+    "PAPER_TICK_URL": "https://solana-scalper-paper.vercel.app/api/tick",
+    "TICKS_PER_RUN": "6",
+    "DELAY_SECONDS": "10"
+  }
+}
