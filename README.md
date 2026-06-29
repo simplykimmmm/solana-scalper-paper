@@ -24,7 +24,8 @@ Open [http://localhost:3000](http://localhost:3000).
 - Appends scan, entry, exit, win, and loss rows to an AI-ready JSONL log.
 - Stores state in browser local storage by default.
 - Optionally persists server-side state in Upstash Redis REST for cloud scheduler ticks.
-- Includes a GitHub Actions scheduler that can keep paper ticks running after the browser tab is closed.
+- Includes a Vercel Cron fallback for cloud ticks after the browser tab is closed.
+- Includes a GitHub Actions scheduler fallback for free, delayed cloud ticks.
 - Includes a continuous Node paper worker for faster stop-loss and max-hold enforcement.
 
 ## Deploy To Vercel
@@ -45,6 +46,10 @@ UPSTASH_REDIS_REST_TOKEN=
 KV_REST_API_URL=
 KV_REST_API_TOKEN=
 UPSTASH_REDIS_KEY=solana-scalper-paper:v1
+UPSTASH_REDIS_TRAINING_LOG_KEY=solana-scalper-paper:v1:training-log
+UPSTASH_REDIS_TICK_LOCK_KEY=solana-scalper-paper:v1:tick-lock
+TRAINING_LOG_MAX_ROWS=20000
+TICK_LOCK_TTL_SECONDS=120
 CRON_SECRET=
 ```
 
@@ -52,10 +57,35 @@ Optional:
 
 ```text
 JUPITER_API_KEY=
+PAPER_WORKER_INTERVAL_SECONDS=10
 ```
 
-The dashboard Start button runs only while the browser tab is open. For closed-tab
-cloud ticks, use the worker on an always-on machine:
+The dashboard Start button runs only while the browser tab is open.
+
+## Cloud 24/7 Mode
+
+There are now two cloud runners:
+
+1. **Always-on worker**: use this for the real 10-second paper loop.
+2. **Vercel Cron**: use this as a cloud fallback. It runs from Vercel production,
+   not from the browser, but cron timing is minute-level rather than continuous.
+
+Both runners use the same Upstash state and a Redis tick lock, so overlapping
+cloud ticks skip instead of double-opening positions.
+
+### Always-On Worker
+
+The repository includes `render.yaml` for a Render background worker. Create a
+Render Blueprint from this repo, use the `solana-scalper-paper-worker` service,
+and set these secrets in Render:
+
+```text
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
+JUPITER_API_KEY=
+```
+
+The worker start command is:
 
 ```bash
 pnpm paper:worker
@@ -68,6 +98,31 @@ writing:
 ```bash
 pnpm paper:worker:dry
 ```
+
+Keep the Vercel dashboard deployed separately. The worker only runs the paper
+engine and writes state back to Upstash.
+
+### Vercel Cron Fallback
+
+`vercel.json` includes this production cron:
+
+```json
+{
+  "path": "/api/tick",
+  "schedule": "* * * * *"
+}
+```
+
+It calls `GET /api/tick`, which loads cloud state, runs one server-side paper
+tick, saves state, and appends training rows. Set the same Upstash vars and
+`CRON_SECRET` on Vercel. Vercel sends the secret as:
+
+```text
+Authorization: Bearer YOUR_CRON_SECRET
+```
+
+If your Vercel plan does not allow every-minute cron, use the Render worker as
+the primary runner and remove or lower the cron schedule.
 
 The repo also includes `.github/workflows/cloud-paper-tick.yml`, which calls the
 production `/api/tick` endpoint every 5 minutes. GitHub can delay scheduled jobs,
@@ -151,4 +206,5 @@ If paper trading is positive and you want to discuss a live build, use a dedicat
 - Solana transaction fees: https://solana.com/docs/core/fees
 - Solana priority fees RPC: https://solana.com/docs/rpc/http/getrecentprioritizationfees
 - Vercel cron jobs: https://vercel.com/docs/cron-jobs
+- Render Blueprint spec: https://render.com/docs/blueprint-spec
 - Upstash Redis REST API: https://upstash.com/docs/redis/features/restapi

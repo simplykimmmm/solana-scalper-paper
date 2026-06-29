@@ -1,0 +1,29 @@
+services:
+  - type: worker
+    name: solana-scalper-paper-worker
+    runtime: node
+    plan: starter
+    autoDeploy: true
+    buildCommand: corepack enable && pnpm install --frozen-lockfile
+    startCommand: pnpm paper:worker
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: PAPER_WORKER_INTERVAL_SECONDS
+        value: "10"
+      - key: TICK_LOCK_TTL_SECONDS
+        value: "120"
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: UPSTASH_REDIS_KEY
+        value: solana-scalper-paper:v1
+      - key: UPSTASH_REDIS_TRAINING_LOG_KEY
+        value: solana-scalper-paper:v1:training-log
+      - key: UPSTASH_REDIS_TICK_LOCK_KEY
+        value: solana-scalper-paper:v1:tick-lock
+      - key: TRAINING_LOG_MAX_ROWS
+        value: "20000"
+      - key: JUPITER_API_KEY
+        sync: false

@@ -1,7 +1,9 @@
 import { createInitialState, normalizeConfig } from "@/lib/defaults";
 import {
+  acquireCloudTickLock,
   isCloudStorageConfigured,
   readCloudPayload,
+  releaseCloudTickLock,
   writeCloudPayload,
 } from "@/lib/storage";
 import type { StoredPayload } from "@/lib/types";
@@ -40,7 +42,26 @@ export async function POST(request: Request) {
   const normalizedPayload = { config, state };
 
   if (storageConfigured) {
-    await writeCloudPayload(normalizedPayload);
+    const lockToken = await acquireCloudTickLock();
+
+    if (!lockToken) {
+      return Response.json(
+        {
+          ok: false,
+          storageConfigured,
+          saved: false,
+          error: "Cloud state is busy. Retry after the current tick finishes.",
+          payload: normalizedPayload,
+        },
+        { status: 409 },
+      );
+    }
+
+    try {
+      await writeCloudPayload(normalizedPayload);
+    } finally {
+      await releaseCloudTickLock(lockToken);
+    }
   }
 
   return Response.json({

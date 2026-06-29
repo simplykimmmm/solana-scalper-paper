@@ -1,9 +1,11 @@
 import { createInitialState, normalizeConfig } from "../lib/defaults";
 import { runPaperTick } from "../lib/engine";
 import {
+  acquireCloudTickLock,
   appendCloudTrainingRows,
   isCloudStorageConfigured,
   readCloudPayload,
+  releaseCloudTickLock,
   writeCloudPayload,
 } from "../lib/storage";
 
@@ -42,35 +44,51 @@ async function main() {
 
 async function runWorkerTick(dryRun: boolean) {
   const storageConfigured = isCloudStorageConfigured();
-  const payload = storageConfigured ? await readCloudPayload() : null;
-  const config = normalizeConfig(payload?.config);
-  const state = payload?.state || createInitialState(config);
-  const result = await runPaperTick({
-    config,
-    state,
-    storageConfigured,
-    storageSaved: false,
-    source: "worker",
-  });
+  const lockToken =
+    !dryRun && storageConfigured ? await acquireCloudTickLock() : null;
 
-  if (!dryRun && storageConfigured) {
-    await writeCloudPayload({
-      config: result.config,
-      state: result.state,
-    });
-    await appendCloudTrainingRows(result.trainingRows);
-    result.storageSaved = true;
+  if (!dryRun && storageConfigured && !lockToken) {
+    console.log(
+      "[paper] skipped tick because another cloud runner holds the lock.",
+    );
+    return;
   }
 
-  const prefix = dryRun ? "[dry]" : "[paper]";
-  console.log(
-    `${prefix} tick=${result.state.tickCount} opened=${result.summary.opened} closed=${result.summary.closed} skipped=${result.summary.skipped} errors=${result.summary.errors} equity=${result.summary.equitySol.toFixed(4)} size=${result.summary.computedTradeSizeSol.toFixed(4)} saved=${result.storageSaved}`,
-  );
+  try {
+    const payload = storageConfigured ? await readCloudPayload() : null;
+    const config = normalizeConfig(payload?.config);
+    const state = payload?.state || createInitialState(config);
+    const result = await runPaperTick({
+      config,
+      state,
+      storageConfigured,
+      storageSaved: false,
+      source: "worker",
+    });
 
-  if (!storageConfigured) {
-    console.warn(
-      "[paper] cloud storage is not configured; worker state will not persist.",
+    if (!dryRun && storageConfigured) {
+      await writeCloudPayload({
+        config: result.config,
+        state: result.state,
+      });
+      await appendCloudTrainingRows(result.trainingRows);
+      result.storageSaved = true;
+    }
+
+    const prefix = dryRun ? "[dry]" : "[paper]";
+    console.log(
+      `${prefix} tick=${result.state.tickCount} opened=${result.summary.opened} closed=${result.summary.closed} skipped=${result.summary.skipped} errors=${result.summary.errors} equity=${result.summary.equitySol.toFixed(4)} size=${result.summary.computedTradeSizeSol.toFixed(4)} saved=${result.storageSaved}`,
     );
+
+    if (!storageConfigured) {
+      console.warn(
+        "[paper] cloud storage is not configured; worker state will not persist.",
+      );
+    }
+  } finally {
+    if (lockToken) {
+      await releaseCloudTickLock(lockToken);
+    }
   }
 }
 

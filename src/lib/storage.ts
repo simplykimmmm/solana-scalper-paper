@@ -3,7 +3,12 @@ import type { StoredPayload, TrainingLogRow } from "./types";
 const STORAGE_KEY = process.env.UPSTASH_REDIS_KEY || "solana-scalper-paper:v1";
 const TRAINING_LOG_KEY =
   process.env.UPSTASH_REDIS_TRAINING_LOG_KEY || `${STORAGE_KEY}:training-log`;
+const TICK_LOCK_KEY =
+  process.env.UPSTASH_REDIS_TICK_LOCK_KEY || `${STORAGE_KEY}:tick-lock`;
 const DEFAULT_TRAINING_LOG_LIMIT = 20_000;
+const DEFAULT_TICK_LOCK_TTL_SECONDS = 120;
+const RELEASE_LOCK_SCRIPT =
+  'if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end';
 
 export function isCloudStorageConfigured(): boolean {
   return Boolean(getRedisRestUrl() && getRedisRestToken());
@@ -74,6 +79,38 @@ export async function readCloudTrainingRows(
   });
 }
 
+export async function acquireCloudTickLock(): Promise<string | null> {
+  if (!isCloudStorageConfigured()) {
+    return null;
+  }
+
+  const token = crypto.randomUUID();
+  const result = await upstashCommand<"OK" | null>([
+    "SET",
+    TICK_LOCK_KEY,
+    token,
+    "NX",
+    "EX",
+    getTickLockTtlSeconds(),
+  ]);
+
+  return result === "OK" ? token : null;
+}
+
+export async function releaseCloudTickLock(token: string): Promise<void> {
+  if (!isCloudStorageConfigured()) {
+    return;
+  }
+
+  await upstashCommand<number>([
+    "EVAL",
+    RELEASE_LOCK_SCRIPT,
+    1,
+    TICK_LOCK_KEY,
+    token,
+  ]);
+}
+
 async function upstashCommand<T>(command: unknown[]): Promise<T> {
   const url = getRedisRestUrl();
   const token = getRedisRestToken();
@@ -119,4 +156,14 @@ function getTrainingLogLimit(): number {
   }
 
   return Math.max(100, Math.min(Math.round(parsed), 100_000));
+}
+
+function getTickLockTtlSeconds(): number {
+  const parsed = Number(process.env.TICK_LOCK_TTL_SECONDS);
+
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_TICK_LOCK_TTL_SECONDS;
+  }
+
+  return Math.max(15, Math.min(Math.round(parsed), 900));
 }

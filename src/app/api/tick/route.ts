@@ -1,9 +1,11 @@
 import { createInitialState, normalizeConfig } from "@/lib/defaults";
 import { runPaperTick } from "@/lib/engine";
 import {
+  acquireCloudTickLock,
   appendCloudTrainingRows,
   isCloudStorageConfigured,
   readCloudPayload,
+  releaseCloudTickLock,
   writeCloudPayload,
 } from "@/lib/storage";
 import type { BotConfig, BotState } from "@/lib/types";
@@ -56,21 +58,38 @@ export async function GET(request: Request) {
     );
   }
 
-  const payload = await readCloudPayload();
-  const config = normalizeConfig(payload?.config);
-  const result = await runPaperTick({
-    config,
-    state: payload?.state || createInitialState(config),
-    storageConfigured,
-    source: "scheduler",
-  });
+  const lockToken = await acquireCloudTickLock();
 
-  await writeCloudPayload({
-    config: result.config,
-    state: result.state,
-  });
-  await appendCloudTrainingRows(result.trainingRows);
-  result.storageSaved = true;
+  if (!lockToken) {
+    return Response.json(
+      {
+        ok: true,
+        skipped: true,
+        reason: "tick-lock-active",
+      },
+      { status: 202 },
+    );
+  }
 
-  return Response.json(result);
+  try {
+    const payload = await readCloudPayload();
+    const config = normalizeConfig(payload?.config);
+    const result = await runPaperTick({
+      config,
+      state: payload?.state || createInitialState(config),
+      storageConfigured,
+      source: "scheduler",
+    });
+
+    await writeCloudPayload({
+      config: result.config,
+      state: result.state,
+    });
+    await appendCloudTrainingRows(result.trainingRows);
+    result.storageSaved = true;
+
+    return Response.json(result);
+  } finally {
+    await releaseCloudTickLock(lockToken);
+  }
 }

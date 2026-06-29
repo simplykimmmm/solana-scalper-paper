@@ -237,6 +237,8 @@ export function Dashboard() {
   }
 
   async function saveState() {
+    setError(null);
+
     const response = await fetch("/api/state", {
       method: "POST",
       headers: {
@@ -244,7 +246,15 @@ export function Dashboard() {
       },
       body: JSON.stringify({ config, state }),
     });
-    const data = (await response.json()) as { storageConfigured: boolean };
+    const data = (await response.json()) as {
+      storageConfigured: boolean;
+      error?: string;
+    };
+
+    if (!response.ok) {
+      setError(data.error || "Save failed.");
+      return;
+    }
 
     setStorageConfigured(data.storageConfigured);
     setSaveCloudState(data.storageConfigured);
@@ -692,12 +702,13 @@ export function Dashboard() {
             </p>
             <p className="mt-2 text-sm leading-6 text-[#5d6554]">
               Browser ticks are manual/local and can stop when the tab is closed.
-              Use `pnpm paper:worker` for protected continuous exits.
+              Vercel Cron is a cloud fallback. Use the always-on worker for the
+              10-second exit loop.
             </p>
             {tickHealth.isStale ? (
               <div className="mt-3 rounded-[6px] border border-[#e4a5a5] bg-[#fff4f1] px-3 py-2 text-sm text-[#8d2525]">
-                Last tick is stale. Exits are not protected until a worker,
-                scheduler, or manual tick runs.
+                Last tick is stale. Exits are not protected until a cloud worker,
+                cron tick, or manual tick runs.
               </div>
             ) : null}
             {state.drawdownLocked ? (
@@ -1272,7 +1283,11 @@ function getTickHealth(state: BotState, config: BotConfig) {
   }
 
   const ageSeconds = (Date.now() - new Date(state.lastTickAt).getTime()) / 1_000;
-  const isStale = ageSeconds > config.tickIntervalSeconds * 2;
+  const staleAfterSeconds =
+    state.lastTickSource === "scheduler"
+      ? Math.max(config.tickIntervalSeconds * 2, 150)
+      : config.tickIntervalSeconds * 2;
+  const isStale = ageSeconds > staleAfterSeconds;
 
   if (isStale) {
     return {
@@ -1282,9 +1297,17 @@ function getTickHealth(state: BotState, config: BotConfig) {
     };
   }
 
-  if (state.lastTickSource === "worker" || state.lastTickSource === "scheduler") {
+  if (state.lastTickSource === "worker") {
     return {
       label: "live worker healthy",
+      tone: "green" as const,
+      isStale,
+    };
+  }
+
+  if (state.lastTickSource === "scheduler") {
+    return {
+      label: "cloud cron healthy",
       tone: "green" as const,
       isStale,
     };
