@@ -24,6 +24,7 @@ Open [http://localhost:3000](http://localhost:3000).
 - Appends scan, entry, exit, win, and loss rows to an AI-ready JSONL log.
 - Stores state in browser local storage by default.
 - Optionally persists server-side state in Upstash Redis REST for cloud scheduler ticks.
+- Includes a GitHub Actions scheduler that can keep paper ticks running after the browser tab is closed.
 
 ## Deploy To Vercel
 
@@ -52,14 +53,28 @@ Optional:
 JUPITER_API_KEY=
 ```
 
-Vercel Hobby cron has a once-per-day minimum interval. For a free one-hour paper run, keep the dashboard tab open and press Start, or use an external free scheduler to call:
+The dashboard Start button runs only while the browser tab is open. For closed-tab
+cloud ticks, this repo includes `.github/workflows/cloud-paper-tick.yml`, which
+calls the production `/api/tick` endpoint every 5 minutes. GitHub can delay
+scheduled jobs, so treat this as a free background runner, not a precise
+second-by-second process.
+
+If `CRON_SECRET` is set on Vercel, add the same value as a GitHub Actions secret
+named `CRON_SECRET`. The workflow uses this endpoint by default:
 
 ```text
 GET https://YOUR_APP.vercel.app/api/tick
 Authorization: Bearer YOUR_CRON_SECRET
 ```
 
-That server-side path requires Upstash env vars.
+Optional repository variable:
+
+```text
+PAPER_TICK_URL=https://YOUR_APP.vercel.app/api/tick
+```
+
+That server-side path requires Upstash env vars. Without Upstash, closed-tab
+cloud ticks cannot persist state.
 
 ## AI Training Export
 

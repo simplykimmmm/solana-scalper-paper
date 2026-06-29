@@ -1,0 +1,78 @@
+name: Cloud paper tick
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      ticks:
+        description: "Number of ticks to run now, max 20"
+        required: true
+        default: "1"
+      delay_seconds:
+        description: "Seconds between manual ticks"
+        required: true
+        default: "30"
+
+permissions: {}
+
+concurrency:
+  group: cloud-paper-tick
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Call paper tick endpoint
+        shell: bash
+        env:
+          TICK_URL: ${{ vars.PAPER_TICK_URL || 'https://solana-scalper-paper.vercel.app/api/tick' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          REQUESTED_TICKS: ${{ github.event.inputs.ticks || '1' }}
+          REQUESTED_DELAY_SECONDS: ${{ github.event.inputs.delay_seconds || '30' }}
+        run: |
+          set -euo pipefail
+
+          ticks="$REQUESTED_TICKS"
+          delay_seconds="$REQUESTED_DELAY_SECONDS"
+
+          if ! [[ "$ticks" =~ ^[0-9]+$ ]]; then
+            ticks=1
+          fi
+
+          if ! [[ "$delay_seconds" =~ ^[0-9]+$ ]]; then
+            delay_seconds=30
+          fi
+
+          if (( ticks < 1 )); then
+            ticks=1
+          elif (( ticks > 20 )); then
+            ticks=20
+          fi
+
+          if (( delay_seconds < 5 )); then
+            delay_seconds=5
+          elif (( delay_seconds > 300 )); then
+            delay_seconds=300
+          fi
+
+          for tick in $(seq 1 "$ticks"); do
+            echo "Running cloud paper tick $tick/$ticks"
+
+            if [ -n "$CRON_SECRET" ]; then
+              curl --fail-with-body --silent --show-error --max-time 90 \
+                --header "Authorization: Bearer $CRON_SECRET" \
+                "$TICK_URL"
+            else
+              curl --fail-with-body --silent --show-error --max-time 90 \
+                "$TICK_URL"
+            fi
+
+            echo
+
+            if [ "$tick" -lt "$ticks" ]; then
+              sleep "$delay_seconds"
+            fi
+          done
