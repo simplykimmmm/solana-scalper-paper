@@ -7,8 +7,8 @@ This is not a live trading bot. It does not connect to a wallet, sign transactio
 ## Getting Started
 
 ```bash
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
@@ -25,6 +25,7 @@ Open [http://localhost:3000](http://localhost:3000).
 - Stores state in browser local storage by default.
 - Optionally persists server-side state in Upstash Redis REST for cloud scheduler ticks.
 - Includes a GitHub Actions scheduler that can keep paper ticks running after the browser tab is closed.
+- Includes a continuous Node paper worker for faster stop-loss and max-hold enforcement.
 
 ## Deploy To Vercel
 
@@ -54,10 +55,23 @@ JUPITER_API_KEY=
 ```
 
 The dashboard Start button runs only while the browser tab is open. For closed-tab
-cloud ticks, this repo includes `.github/workflows/cloud-paper-tick.yml`, which
-calls the production `/api/tick` endpoint every 5 minutes. GitHub can delay
-scheduled jobs, so treat this as a free background runner, not a precise
-second-by-second process.
+cloud ticks, use the worker on an always-on machine:
+
+```bash
+pnpm paper:worker
+```
+
+The worker loads state from Upstash, runs one paper tick about every 10 seconds,
+saves state back, and appends training rows. Dry-run mode runs one tick without
+writing:
+
+```bash
+pnpm paper:worker:dry
+```
+
+The repo also includes `.github/workflows/cloud-paper-tick.yml`, which calls the
+production `/api/tick` endpoint every 5 minutes. GitHub can delay scheduled jobs,
+so treat this as a free fallback runner, not a precise second-by-second process.
 
 If `CRON_SECRET` is set on Vercel, add the same value as a GitHub Actions secret
 named `CRON_SECRET`. The workflow uses this endpoint by default:
@@ -97,18 +111,26 @@ TRAINING_LOG_MAX_ROWS=20000
 
 ## Default Strategy
 
-The default is intentionally selective:
+The default is intentionally safer than the earlier 1 SOL experiments:
 
 - Buy one candidate per tick at most.
-- Trade size: `0.1 SOL`.
+- Adaptive paper size: starts between `0.05` and `0.10 SOL`.
+- Max default paper size: `0.15 SOL`.
+- Risk per trade: `1%`.
+- Scale-up requires at least `50` closed trades and profit factor above `1.4`.
 - Max open positions: `3`.
-- Take profit: `+8%` net after modeled fees.
-- Stop loss: `-5%` net after modeled fees.
-- Trailing stop: activates at `+6%`, exits after a `3%` pullback.
-- Max hold: `20 minutes`.
-- Max Jupiter price impact: `1.5%`.
-- Minimum liquidity: `$20,000`.
-- Minimum five-minute volume: `$2,500`.
+- Take profit: `+4.5%` net after modeled fees.
+- Stop loss: `-3.5%` net after modeled fees.
+- Emergency stop: `-8%`.
+- Trailing stop: activates at `+2.5%`, exits after a `1.25%` pullback.
+- Max hold: `8 minutes`.
+- Max Jupiter entry price impact: `0.75%`.
+- Minimum score: `60`.
+- Minimum liquidity: `$50,000`.
+- Minimum five-minute volume: `$7,500`.
+- Minimum five-minute buys: `15`.
+- Minimum buy/sell ratio: `1.15`.
+- Daily drawdown lock: `5%`.
 
 All settings are editable in the dashboard.
 

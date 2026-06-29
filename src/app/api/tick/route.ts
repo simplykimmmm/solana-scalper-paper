@@ -21,6 +21,7 @@ export async function POST(request: Request) {
     config: body.config,
     state: body.state,
     storageConfigured,
+    source: "browser",
   });
 
   if (body.saveCloudState && storageConfigured) {
@@ -61,6 +62,7 @@ export async function GET(request: Request) {
     config,
     state: payload?.state || createInitialState(config),
     storageConfigured,
+    source: "scheduler",
   });
 
   await writeCloudPayload({

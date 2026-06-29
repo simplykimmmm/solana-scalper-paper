@@ -14,6 +14,21 @@ import {
   SOL_MINT,
 } from "./jupiter";
 import {
+  applyQuoteFailureMark,
+  calculateEquitySol,
+  calculateMarkedOpenValueSol,
+  calculateOpenPnlSol,
+  calculateRealizedPnlSol,
+  closePosition,
+  computeTradeSizeSol,
+  ensureRiskState,
+  estimateInitialExitSol,
+  getExitReason,
+  getQuoteFailureExitReason,
+  isDailyDrawdownLocked,
+  updatePositionMark,
+} from "./risk";
+import {
   createEntryTrainingRow,
   createErrorTrainingRow,
   createExitTrainingRow,
@@ -27,18 +42,27 @@ import type {
   MarketCandidate,
   PaperPosition,
   TickResult,
-  TradeExitReason,
+  TickSource,
   TrainingLogRow,
 } from "./types";
+
+const ESTIMATED_SOL_USD = 150;
 
 export async function runPaperTick(input: {
   config?: Partial<BotConfig>;
   state?: BotState | null;
   storageConfigured?: boolean;
   storageSaved?: boolean;
+  source?: TickSource;
+  now?: Date;
 }): Promise<TickResult> {
   const config = normalizeConfig(input.config);
-  const state = input.state ? cloneState(input.state) : createInitialState(config);
+  const now = input.now || new Date();
+  let state = normalizeRuntimeState(
+    input.state ? cloneState(input.state) : createInitialState(config),
+    config,
+    now,
+  );
   const activity = [...state.activity];
   const candidates: MarketCandidate[] = [];
   const trainingRows: TrainingLogRow[] = [];
@@ -48,7 +72,9 @@ export async function runPaperTick(input: {
   let skipped = 0;
   let errors = 0;
 
-  state.updatedAt = new Date().toISOString();
+  state.updatedAt = now.toISOString();
+  state.lastTickAt = now.toISOString();
+  state.lastTickSource = input.source || "browser";
   state.tickCount += 1;
 
   activity.unshift(
@@ -59,14 +85,14 @@ export async function runPaperTick(input: {
 
   for (const position of state.openPositions) {
     try {
-      const marked = await markPosition(position, config);
-      const reason = getExitReason(marked, config);
+      const marked = await markPosition(position, config, now);
+      const reason = getExitReason(marked, config, now);
 
       if (reason) {
-        const closedTrade = closePosition(marked, config, reason);
+        const closedTrade = closePosition(marked, config, reason, now);
         state.closedTrades.unshift(closedTrade);
         closedTradesThisTick.push(closedTrade);
-        state.cooldowns[marked.tokenAddress] = new Date().toISOString();
+        state.cooldowns[marked.tokenAddress] = now.toISOString();
         state.cashSol += closedTrade.exitSol - closedTrade.exitFeeSol;
         closed += 1;
         activity.unshift(
@@ -81,30 +107,63 @@ export async function runPaperTick(input: {
         markedPositions.push(marked);
       }
     } catch (error) {
-      errors += 1;
-      markedPositions.push({
-        ...position,
-        lastError: getErrorMessage(error),
+      const forcedReason = getQuoteFailureExitReason({
+        position,
+        config,
+        error,
+        now,
       });
-      activity.unshift(
-        createActivity(
-          "error",
-          `${position.symbol} exit quote failed: ${getErrorMessage(error)}`,
-        ),
-      );
-      trainingRows.push(
-        createErrorTrainingRow({
-          tick: state.tickCount,
+
+      if (forcedReason) {
+        const riskMarked = applyQuoteFailureMark(
+          position,
           config,
-          state,
-          message: `${position.symbol} exit quote failed.`,
-          error: getErrorMessage(error),
-        }),
-      );
+          forcedReason,
+          error,
+        );
+        const closedTrade = closePosition(riskMarked, config, forcedReason, now);
+        state.closedTrades.unshift(closedTrade);
+        closedTradesThisTick.push(closedTrade);
+        state.cooldowns[position.tokenAddress] = now.toISOString();
+        state.cashSol += closedTrade.exitSol - closedTrade.exitFeeSol;
+        closed += 1;
+        errors += 1;
+        activity.unshift(
+          createActivity(
+            "exit",
+            `${position.symbol} closed by ${forcedReason}: ${getErrorMessage(
+              error,
+            )}`,
+          ),
+        );
+      } else {
+        errors += 1;
+        markedPositions.push({
+          ...position,
+          lastError: getErrorMessage(error),
+        });
+        activity.unshift(
+          createActivity(
+            "error",
+            `${position.symbol} exit quote failed: ${getErrorMessage(error)}`,
+          ),
+        );
+        trainingRows.push(
+          createErrorTrainingRow({
+            tick: state.tickCount,
+            config,
+            state,
+            message: `${position.symbol} exit quote failed.`,
+            error: getErrorMessage(error),
+          }),
+        );
+      }
     }
   }
 
   state.openPositions = markedPositions;
+  state = ensureRiskState(state, config, now);
+
   for (const closedTrade of closedTradesThisTick) {
     trainingRows.push(
       createExitTrainingRow({
@@ -116,14 +175,39 @@ export async function runPaperTick(input: {
     );
   }
 
+  let computedTradeSizeSol = computeTradeSizeSol(config, state);
+  const drawdownLocked = isDailyDrawdownLocked(state, config);
   const slots = Math.min(
     config.maxOpenPositions - state.openPositions.length,
     config.maxNewPositionsPerTick,
   );
 
-  if (slots > 0 && state.cashSol >= config.tradeSizeSol + estimatedTxFeeSol(config)) {
+  if (drawdownLocked) {
+    activity.unshift(
+      createActivity(
+        "skip",
+        `Daily drawdown lock active at ${state.dailyDrawdownPct.toFixed(2)}%.`,
+      ),
+    );
+    trainingRows.push(
+      createSkipTrainingRow({
+        tick: state.tickCount,
+        config,
+        state,
+        message: "Daily drawdown lock active.",
+      }),
+    );
+  } else if (
+    slots > 0 &&
+    state.cashSol >= computedTradeSizeSol + estimatedTxFeeSol(config)
+  ) {
     try {
-      candidates.push(...(await scanDexScreener(config)));
+      const scannedCandidates = await scanDexScreener(config);
+      candidates.push(
+        ...scannedCandidates.map((candidate) =>
+          applyEntryRejections(candidate, config, state, computedTradeSizeSol, now),
+        ),
+      );
       activity.unshift(
         createActivity("scan", `Scanner returned ${candidates.length} candidates.`),
       );
@@ -141,11 +225,7 @@ export async function runPaperTick(input: {
           break;
         }
 
-        if (
-          state.openPositions.some(
-            (position) => position.tokenAddress === candidate.tokenAddress,
-          )
-        ) {
+        if (candidate.rejectionReasons.length > 0) {
           skipped += 1;
           trainingRows.push(
             createSkipTrainingRow({
@@ -153,27 +233,17 @@ export async function runPaperTick(input: {
               config,
               state,
               candidate,
-              message: `${candidate.symbol} skipped: already open.`,
+              message: `${candidate.symbol} rejected: ${candidate.rejectionReasons.join(
+                ", ",
+              )}.`,
             }),
           );
           continue;
         }
 
-        if (isCoolingDown(candidate.tokenAddress, state, config)) {
-          skipped += 1;
-          trainingRows.push(
-            createSkipTrainingRow({
-              tick: state.tickCount,
-              config,
-              state,
-              candidate,
-              message: `${candidate.symbol} skipped: cooldown active.`,
-            }),
-          );
-          continue;
-        }
+        computedTradeSizeSol = computeTradeSizeSol(config, state);
 
-        if (state.cashSol < config.tradeSizeSol + estimatedTxFeeSol(config)) {
+        if (state.cashSol < computedTradeSizeSol + estimatedTxFeeSol(config)) {
           activity.unshift(
             createActivity("skip", "Cash is below the next paper trade size."),
           );
@@ -190,9 +260,10 @@ export async function runPaperTick(input: {
         }
 
         try {
-          const position = await openPosition(candidate, config);
+          const position = await openPosition(candidate, config, computedTradeSizeSol);
           state.cashSol -= position.entryTotalCostSol;
           state.openPositions.unshift(position);
+          state = ensureRiskState(state, config, now);
           opened += 1;
           activity.unshift(
             createActivity(
@@ -207,12 +278,21 @@ export async function runPaperTick(input: {
               tick: state.tickCount,
               config,
               state,
-              candidate,
+              candidate: {
+                ...candidate,
+                accepted: true,
+              },
               position,
             }),
           );
         } catch (error) {
           errors += 1;
+          const reason = quoteErrorToRejection(error);
+          candidate.accepted = false;
+          candidate.rejectionReasons = dedupeStrings([
+            ...candidate.rejectionReasons,
+            reason,
+          ]);
           activity.unshift(
             createActivity(
               "skip",
@@ -257,7 +337,9 @@ export async function runPaperTick(input: {
     );
   }
 
+  state = ensureRiskState(state, config, now);
   const equitySol = calculateEquitySol(state);
+  const markedOpenValueSol = calculateMarkedOpenValueSol(state);
   state.equityCurve.unshift({
     at: state.updatedAt,
     cashSol: state.cashSol,
@@ -284,6 +366,9 @@ export async function runPaperTick(input: {
       equitySol,
       realizedPnlSol: calculateRealizedPnlSol(state),
       openPnlSol: calculateOpenPnlSol(state),
+      markedOpenValueSol,
+      computedTradeSizeSol: computeTradeSizeSol(config, state),
+      drawdownLocked: state.drawdownLocked,
     },
   };
 }
@@ -292,25 +377,74 @@ function cloneState(state: BotState): BotState {
   return JSON.parse(JSON.stringify(state)) as BotState;
 }
 
+function normalizeRuntimeState(
+  input: BotState,
+  config: BotConfig,
+  now: Date,
+): BotState {
+  const fallback = createInitialState(config);
+  const state = {
+    ...fallback,
+    ...input,
+    openPositions: input.openPositions || [],
+    closedTrades: input.closedTrades || [],
+    activity: input.activity || [],
+    equityCurve: input.equityCurve || [],
+    cooldowns: input.cooldowns || {},
+  };
+
+  return ensureRiskState(state, config, now);
+}
+
 async function openPosition(
   candidate: MarketCandidate,
   config: BotConfig,
+  tradeSizeSol: number,
 ): Promise<PaperPosition> {
   const quote = await quoteExactIn({
     config,
     inputMint: SOL_MINT,
     outputMint: candidate.tokenAddress,
-    amount: solToLamportsString(config.tradeSizeSol),
+    amount: solToLamportsString(tradeSizeSol),
   });
   const priceImpactPct = quotePriceImpactPct(quote);
 
-  if (priceImpactPct > config.maxPriceImpactPct) {
+  if (priceImpactPct > config.maxEntryPriceImpactPct) {
     throw new Error(
-      `price impact ${priceImpactPct.toFixed(2)}% exceeds ${config.maxPriceImpactPct}%`,
+      `price impact ${priceImpactPct.toFixed(2)}% exceeds ${config.maxEntryPriceImpactPct}%`,
     );
   }
 
   const entryFeeSol = estimatedTxFeeSol(config);
+  const tokenRawAmount = conservativeOutAmount(quote);
+  const openedAt = new Date().toISOString();
+  let currentExitSol = estimateInitialExitSol({
+    entrySol: tradeSizeSol,
+    entryFeeSol,
+    entryPriceImpactPct: priceImpactPct,
+    config,
+  });
+
+  try {
+    const reverseQuote = await quoteExactIn({
+      config,
+      inputMint: candidate.tokenAddress,
+      outputMint: SOL_MINT,
+      amount: tokenRawAmount,
+    });
+    currentExitSol = Math.max(
+      0,
+      lamportsStringToSol(conservativeOutAmount(reverseQuote)) - entryFeeSol,
+    );
+  } catch {
+    // Keep the deterministic conservative estimate when no immediate reverse quote is available.
+  }
+
+  const currentNetPnlSol = currentExitSol - (tradeSizeSol + entryFeeSol);
+  const currentNetPnlPct =
+    tradeSizeSol + entryFeeSol > 0
+      ? (currentNetPnlSol / (tradeSizeSol + entryFeeSol)) * 100
+      : 0;
 
   return {
     id: crypto.randomUUID(),
@@ -319,24 +453,25 @@ async function openPosition(
     symbol: candidate.symbol,
     name: candidate.name,
     sourceUrl: candidate.url,
-    openedAt: new Date().toISOString(),
-    entrySol: config.tradeSizeSol,
+    openedAt,
+    entrySol: tradeSizeSol,
     entryFeeSol,
-    entryTotalCostSol: config.tradeSizeSol + entryFeeSol,
-    tokenRawAmount: conservativeOutAmount(quote),
+    entryTotalCostSol: tradeSizeSol + entryFeeSol,
+    tokenRawAmount,
     entryPriceImpactPct: priceImpactPct,
     entryScore: candidate.score,
-    currentExitSol: 0,
-    currentNetPnlSol: -entryFeeSol,
-    currentNetPnlPct: (-entryFeeSol / (config.tradeSizeSol + entryFeeSol)) * 100,
-    peakNetPnlPct: 0,
-    lastQuoteAt: new Date().toISOString(),
+    currentExitSol,
+    currentNetPnlSol,
+    currentNetPnlPct,
+    peakNetPnlPct: Math.max(0, currentNetPnlPct),
+    lastQuoteAt: openedAt,
   };
 }
 
 async function markPosition(
   position: PaperPosition,
   config: BotConfig,
+  now: Date,
 ): Promise<PaperPosition> {
   const quote = await quoteExactIn({
     config,
@@ -347,76 +482,39 @@ async function markPosition(
   const exitSol = lamportsStringToSol(conservativeOutAmount(quote));
   const exitFeeSol = estimatedTxFeeSol(config);
   const currentExitSol = Math.max(0, exitSol - exitFeeSol);
-  const currentNetPnlSol = currentExitSol - position.entryTotalCostSol;
-  const currentNetPnlPct =
-    position.entryTotalCostSol > 0
-      ? (currentNetPnlSol / position.entryTotalCostSol) * 100
-      : 0;
 
-  return {
-    ...position,
-    currentExitSol,
-    currentNetPnlSol,
-    currentNetPnlPct,
-    peakNetPnlPct: Math.max(position.peakNetPnlPct, currentNetPnlPct),
-    lastQuoteAt: new Date().toISOString(),
-    lastError: undefined,
-  };
+  return updatePositionMark(position, currentExitSol, now.toISOString());
 }
 
-function getExitReason(
-  position: PaperPosition,
+function applyEntryRejections(
+  candidate: MarketCandidate,
   config: BotConfig,
-): TradeExitReason | null {
-  const holdMinutes =
-    (Date.now() - new Date(position.openedAt).getTime()) / 60_000;
-
-  if (position.currentNetPnlPct >= config.takeProfitNetPct) {
-    return "take-profit";
-  }
-
-  if (position.currentNetPnlPct <= config.stopLossNetPct) {
-    return "stop-loss";
-  }
+  state: BotState,
+  tradeSizeSol: number,
+  now: Date,
+): MarketCandidate {
+  const rejectionReasons = [...candidate.rejectionReasons];
 
   if (
-    position.peakNetPnlPct >= config.trailingActivationPct &&
-    position.peakNetPnlPct - position.currentNetPnlPct >=
-      config.trailingDrawdownPct
+    state.openPositions.some(
+      (position) => position.tokenAddress === candidate.tokenAddress,
+    )
   ) {
-    return "trailing-stop";
+    rejectionReasons.push("already-open");
   }
 
-  if (holdMinutes >= config.maxHoldMinutes) {
-    return "max-hold";
+  if (isCoolingDown(candidate.tokenAddress, state, config, now)) {
+    rejectionReasons.push("recent-duplicate");
   }
 
-  return null;
-}
-
-function closePosition(
-  position: PaperPosition,
-  config: BotConfig,
-  reason: TradeExitReason,
-): ClosedTrade {
-  const exitFeeSol = estimatedTxFeeSol(config);
-  const exitSol = position.currentExitSol + exitFeeSol;
-  const netPnlSol = position.currentExitSol - position.entryTotalCostSol;
-  const netPnlPct =
-    position.entryTotalCostSol > 0
-      ? (netPnlSol / position.entryTotalCostSol) * 100
-      : 0;
+  if (tradeLiquidityPct(tradeSizeSol, candidate.liquidityUsd) > config.maxTradeLiquidityPct) {
+    rejectionReasons.push("trade-too-large-for-liquidity");
+  }
 
   return {
-    ...position,
-    closedAt: new Date().toISOString(),
-    exitReason: reason,
-    exitSol,
-    exitFeeSol,
-    netPnlSol,
-    netPnlPct,
-    holdMinutes:
-      (Date.now() - new Date(position.openedAt).getTime()) / 60_000,
+    ...candidate,
+    rejectionReasons: dedupeStrings(rejectionReasons),
+    accepted: rejectionReasons.length === 0,
   };
 }
 
@@ -424,7 +522,12 @@ function isCoolingDown(
   tokenAddress: string,
   state: BotState,
   config: BotConfig,
+  now: Date,
 ): boolean {
+  if (!config.rejectDuplicateRecentToken) {
+    return false;
+  }
+
   const lastClosedAt = state.cooldowns[tokenAddress];
 
   if (!lastClosedAt || config.cooldownMinutes <= 0) {
@@ -432,33 +535,31 @@ function isCoolingDown(
   }
 
   return (
-    Date.now() - new Date(lastClosedAt).getTime() <
+    now.getTime() - new Date(lastClosedAt).getTime() <
     config.cooldownMinutes * 60_000
   );
 }
 
-function calculateEquitySol(state: BotState): number {
-  return (
-    state.cashSol +
-    state.openPositions.reduce(
-      (total, position) => total + Math.max(position.currentExitSol, 0),
-      0,
-    )
-  );
+function tradeLiquidityPct(tradeSizeSol: number, liquidityUsd: number): number {
+  if (liquidityUsd <= 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return ((tradeSizeSol * ESTIMATED_SOL_USD) / liquidityUsd) * 100;
 }
 
-function calculateOpenPnlSol(state: BotState): number {
-  return state.openPositions.reduce(
-    (total, position) => total + position.currentNetPnlSol,
-    0,
-  );
-}
+function quoteErrorToRejection(error: unknown): string {
+  const message = getErrorMessage(error).toLowerCase();
 
-function calculateRealizedPnlSol(state: BotState): number {
-  return state.closedTrades.reduce(
-    (total, trade) => total + trade.netPnlSol,
-    0,
-  );
+  if (message.includes("price impact")) {
+    return "high-impact";
+  }
+
+  if (message.includes("no route") || message.includes("could not find")) {
+    return "no-route";
+  }
+
+  return "quote-failed";
 }
 
 function formatSigned(value: number): string {
@@ -467,4 +568,8 @@ function formatSigned(value: number): string {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "unknown error";
+}
+
+function dedupeStrings(values: string[]): string[] {
+  return [...new Set(values)];
 }

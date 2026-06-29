@@ -172,6 +172,8 @@ function candidateSnapshot(
     source: candidate.source,
     score: candidate.score,
     reasons: [...candidate.reasons],
+    rejectionReasons: [...candidate.rejectionReasons],
+    accepted: candidate.accepted,
   };
 }
 

@@ -18,7 +18,9 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { computeTradeStats } from "@/lib/analytics";
 import { DEFAULT_CONFIG, createInitialState } from "@/lib/defaults";
+import { computeTradeSizeSol } from "@/lib/risk";
 import type {
   ActivityEvent,
   BotConfig,
@@ -130,32 +132,25 @@ export function Dashboard() {
   }, [hasLoadedPreferences, isRunning]);
 
   const metrics = useMemo(() => {
-    const equitySol =
-      summary?.equitySol ??
-      state.cashSol +
-        state.openPositions.reduce(
-          (total, position) => total + Math.max(position.currentExitSol, 0),
-          0,
-        );
-    const realizedPnlSol = state.closedTrades.reduce(
-      (total, trade) => total + trade.netPnlSol,
-      0,
-    );
-    const wins = state.closedTrades.filter(
-      (trade) => trade.netPnlSol > 0,
-    ).length;
-    const winRate =
-      state.closedTrades.length > 0 ? (wins / state.closedTrades.length) * 100 : 0;
+    const stats = computeTradeStats(state);
 
     return {
-      equitySol,
+      equitySol: summary?.equitySol ?? stats.equitySol,
       cashSol: state.cashSol,
+      markedOpenValueSol:
+        summary?.markedOpenValueSol ?? stats.markedOpenValueSol,
       openCount: state.openPositions.length,
-      realizedPnlSol,
-      winRate,
+      openPnlSol: summary?.openPnlSol ?? stats.openPnlSol,
+      realizedPnlSol: summary?.realizedPnlSol ?? stats.realizedPnlSol,
+      winRate: stats.winRatePct,
       trades: state.closedTrades.length,
+      computedTradeSizeSol:
+        summary?.computedTradeSizeSol ?? computeTradeSizeSol(config, state),
+      stats,
     };
-  }, [state, summary]);
+  }, [config, state, summary]);
+
+  const tickHealth = useMemo(() => getTickHealth(state, config), [state, config]);
 
   const runTick = useCallback(async () => {
     if (isTicking) {
@@ -333,8 +328,9 @@ export function Dashboard() {
               <ShieldCheck size={14} />
               Paper only
             </Badge>
+            <Badge tone={tickHealth.tone}>{tickHealth.label}</Badge>
             <IconButton
-              label={isRunning ? "Pause engine" : "Start engine"}
+              label={isRunning ? "Pause browser ticks" : "Start browser ticks"}
               onClick={() => setIsRunning((value) => !value)}
               tone={isRunning ? "amber" : "green"}
             >
@@ -379,6 +375,58 @@ export function Dashboard() {
                 min={0.001}
                 step={0.01}
                 onChange={(value) => updateConfig("tradeSizeSol", value)}
+              />
+              <NumberField
+                label="Computed SOL"
+                value={metrics.computedTradeSizeSol}
+                min={0}
+                step={0.01}
+                onChange={() => undefined}
+                disabled
+              />
+              <NumberField
+                label="Min trade"
+                value={config.minTradeSizeSol}
+                min={0.001}
+                step={0.01}
+                onChange={(value) => updateConfig("minTradeSizeSol", value)}
+              />
+              <NumberField
+                label="Max trade"
+                value={config.maxTradeSizeSol}
+                min={0.001}
+                step={0.01}
+                onChange={(value) => updateConfig("maxTradeSizeSol", value)}
+              />
+              <NumberField
+                label="Risk %"
+                value={config.riskPerTradePct}
+                min={0.01}
+                step={0.1}
+                onChange={(value) => updateConfig("riskPerTradePct", value)}
+              />
+              <NumberField
+                label="Scale trades"
+                value={config.scaleUpAfterTrades}
+                min={1}
+                step={1}
+                onChange={(value) => updateConfig("scaleUpAfterTrades", value)}
+              />
+              <NumberField
+                label="Scale PF"
+                value={config.scaleUpMinProfitFactor}
+                min={0}
+                step={0.1}
+                onChange={(value) =>
+                  updateConfig("scaleUpMinProfitFactor", value)
+                }
+              />
+              <NumberField
+                label="Daily DD %"
+                value={config.maxDailyDrawdownPct}
+                min={0.1}
+                step={0.5}
+                onChange={(value) => updateConfig("maxDailyDrawdownPct", value)}
               />
               <NumberField
                 label="Max open"
@@ -427,6 +475,20 @@ export function Dashboard() {
                 onChange={(value) => updateConfig("trailingDrawdownPct", value)}
               />
               <NumberField
+                label="Emerg %"
+                value={config.emergencyMaxLossPct}
+                max={-0.1}
+                step={0.5}
+                onChange={(value) => updateConfig("emergencyMaxLossPct", value)}
+              />
+              <NumberField
+                label="Stale sec"
+                value={config.staleQuoteMaxSeconds}
+                min={5}
+                step={5}
+                onChange={(value) => updateConfig("staleQuoteMaxSeconds", value)}
+              />
+              <NumberField
                 label="Max hold min"
                 value={config.maxHoldMinutes}
                 min={1}
@@ -455,6 +517,22 @@ export function Dashboard() {
                 onChange={(value) => updateConfig("slippageBps", value)}
               />
             </div>
+            <label className="mt-3 block text-xs font-semibold uppercase text-[#687060]">
+              Risk mode
+              <select
+                className="mt-1 h-10 w-full rounded-[6px] border border-[#cbd3bf] bg-white px-3 text-sm font-medium text-[#151711] outline-none focus:border-[#1d7a50]"
+                value={config.riskMode}
+                onChange={(event) =>
+                  updateConfig(
+                    "riskMode",
+                    event.target.value as BotConfig["riskMode"],
+                  )
+                }
+              >
+                <option value="adaptive">Adaptive</option>
+                <option value="fixed">Fixed</option>
+              </select>
+            </label>
           </Panel>
 
           <Panel title="Filters" icon={<TimerReset size={18} />}>
@@ -482,17 +560,17 @@ export function Dashboard() {
               />
               <NumberField
                 label="Min age min"
-                value={config.minAgeMinutes}
+                value={config.minPairAgeMinutes}
                 min={0}
                 step={1}
-                onChange={(value) => updateConfig("minAgeMinutes", value)}
+                onChange={(value) => updateConfig("minPairAgeMinutes", value)}
               />
               <NumberField
                 label="Max age hr"
-                value={config.maxAgeHours}
+                value={config.maxPairAgeHours}
                 min={0.1}
                 step={1}
-                onChange={(value) => updateConfig("maxAgeHours", value)}
+                onChange={(value) => updateConfig("maxPairAgeHours", value)}
               />
               <NumberField
                 label="Buy/sell"
@@ -509,12 +587,53 @@ export function Dashboard() {
                 onChange={(value) => updateConfig("minBuysM5", value)}
               />
               <NumberField
-                label="Max impact %"
-                value={config.maxPriceImpactPct}
+                label="Min score"
+                value={config.minScoreToEnter}
+                min={0}
+                step={1}
+                onChange={(value) => updateConfig("minScoreToEnter", value)}
+              />
+              <NumberField
+                label="Entry impact %"
+                value={config.maxEntryPriceImpactPct}
                 min={0.01}
                 step={0.1}
-                onChange={(value) => updateConfig("maxPriceImpactPct", value)}
+                onChange={(value) => updateConfig("maxEntryPriceImpactPct", value)}
               />
+              <NumberField
+                label="Trade/liq %"
+                value={config.maxTradeLiquidityPct}
+                min={0.001}
+                step={0.05}
+                onChange={(value) => updateConfig("maxTradeLiquidityPct", value)}
+              />
+            </div>
+            <div className="mt-3 grid grid-cols-1 gap-3 text-sm font-medium">
+              <label className="flex items-center justify-between gap-3">
+                Reject emoji-only symbols
+                <input
+                  className="size-5 accent-[#1d7a50]"
+                  type="checkbox"
+                  checked={config.rejectEmojiOnlySymbols}
+                  onChange={(event) =>
+                    updateConfig("rejectEmojiOnlySymbols", event.target.checked)
+                  }
+                />
+              </label>
+              <label className="flex items-center justify-between gap-3">
+                Reject recent duplicate tokens
+                <input
+                  className="size-5 accent-[#1d7a50]"
+                  type="checkbox"
+                  checked={config.rejectDuplicateRecentToken}
+                  onChange={(event) =>
+                    updateConfig(
+                      "rejectDuplicateRecentToken",
+                      event.target.checked,
+                    )
+                  }
+                />
+              </label>
             </div>
 
             <label className="mt-3 block text-xs font-semibold uppercase text-[#687060]">
@@ -533,6 +652,7 @@ export function Dashboard() {
                 <option value="top-boosts">Top boosts</option>
                 <option value="latest-profiles">Latest profiles</option>
                 <option value="watchlist">Watchlist</option>
+                <option value="combined">Combined</option>
               </select>
             </label>
 
@@ -570,6 +690,21 @@ export function Dashboard() {
                 ? "Upstash storage is active for server-side ticks."
                 : "Add Upstash env vars on Vercel for server-side ticks."}
             </p>
+            <p className="mt-2 text-sm leading-6 text-[#5d6554]">
+              Browser ticks are manual/local and can stop when the tab is closed.
+              Use `pnpm paper:worker` for protected continuous exits.
+            </p>
+            {tickHealth.isStale ? (
+              <div className="mt-3 rounded-[6px] border border-[#e4a5a5] bg-[#fff4f1] px-3 py-2 text-sm text-[#8d2525]">
+                Last tick is stale. Exits are not protected until a worker,
+                scheduler, or manual tick runs.
+              </div>
+            ) : null}
+            {state.drawdownLocked ? (
+              <div className="mt-3 rounded-[6px] border border-[#e6c76f] bg-[#fff6d8] px-3 py-2 text-sm text-[#7c5a05]">
+                Daily drawdown lock active. New entries are blocked; exits still run.
+              </div>
+            ) : null}
             {error ? (
               <div className="mt-3 rounded-[6px] border border-[#e4a5a5] bg-[#fff4f1] px-3 py-2 text-sm text-[#8d2525]">
                 {error}
@@ -579,7 +714,7 @@ export function Dashboard() {
         </aside>
 
         <section className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
             <Metric
               icon={<CircleDollarSign size={18} />}
               label="Equity"
@@ -591,6 +726,15 @@ export function Dashboard() {
               value={`${metrics.cashSol.toFixed(4)} SOL`}
             />
             <Metric
+              label="Open value"
+              value={`${metrics.markedOpenValueSol.toFixed(4)} SOL`}
+            />
+            <Metric
+              label="Open PnL"
+              value={`${signed(metrics.openPnlSol)} SOL`}
+              tone={metrics.openPnlSol >= 0 ? "green" : "red"}
+            />
+            <Metric
               icon={<TrendingUp size={18} />}
               label="Realized"
               value={`${signed(metrics.realizedPnlSol)} SOL`}
@@ -599,10 +743,18 @@ export function Dashboard() {
             <Metric label="Open" value={String(metrics.openCount)} />
             <Metric label="Closed" value={String(metrics.trades)} />
             <Metric label="Win rate" value={`${metrics.winRate.toFixed(1)}%`} />
+            <Metric
+              label="Next size"
+              value={`${metrics.computedTradeSizeSol.toFixed(4)} SOL`}
+            />
           </div>
 
           <Panel title="Equity Curve" icon={<TrendingUp size={18} />}>
             <EquityChart points={state.equityCurve} />
+          </Panel>
+
+          <Panel title="Trade Analytics" icon={<Activity size={18} />}>
+            <AnalyticsView stats={metrics.stats} />
           </Panel>
 
           <div className="grid gap-4 2xl:grid-cols-2">
@@ -732,6 +884,8 @@ function createHydrationState(): BotState {
   return {
     initializedAt: at,
     updatedAt: at,
+    lastTickAt: undefined,
+    lastTickSource: undefined,
     cashSol: DEFAULT_CONFIG.startingCashSol,
     openPositions: [],
     closedTrades: [],
@@ -744,6 +898,13 @@ function createHydrationState(): BotState {
       },
     ],
     cooldowns: {},
+    peakEquitySol: DEFAULT_CONFIG.startingCashSol,
+    maxDrawdownPct: 0,
+    dailyAnchorDate: at.slice(0, 10),
+    dailyStartEquitySol: DEFAULT_CONFIG.startingCashSol,
+    dailyPeakEquitySol: DEFAULT_CONFIG.startingCashSol,
+    dailyDrawdownPct: 0,
+    drawdownLocked: false,
     tickCount: 0,
   };
 }
@@ -774,13 +935,14 @@ function Badge({
   tone,
   children,
 }: {
-  tone: "green" | "amber" | "neutral";
+  tone: "green" | "amber" | "neutral" | "red";
   children: React.ReactNode;
 }) {
   const classes = {
     green: "border-[#8fcaa6] bg-[#e5f5ea] text-[#14613d]",
     amber: "border-[#e6c76f] bg-[#fff6d8] text-[#7c5a05]",
     neutral: "border-[#ccd1c5] bg-white text-[#4b5444]",
+    red: "border-[#e4a5a5] bg-[#fff4f1] text-[#8d2525]",
   };
 
   return (
@@ -829,6 +991,7 @@ function NumberField({
   min,
   max,
   step,
+  disabled = false,
   onChange,
 }: {
   label: string;
@@ -836,6 +999,7 @@ function NumberField({
   min?: number;
   max?: number;
   step?: number;
+  disabled?: boolean;
   onChange: (value: number) => void;
 }) {
   return (
@@ -848,6 +1012,7 @@ function NumberField({
         min={min}
         max={max}
         step={step}
+        disabled={disabled}
         onChange={(event) => onChange(Number(event.target.value))}
       />
     </label>
@@ -920,6 +1085,34 @@ function EquityChart({ points }: { points: BotState["equityCurve"] }) {
   );
 }
 
+function AnalyticsView({ stats }: { stats: ReturnType<typeof computeTradeStats> }) {
+  return (
+    <div className="grid gap-4 xl:grid-cols-2">
+      <Table
+        headers={["Metric", "Value"]}
+        rows={[
+          ["Profit factor", formatFactor(stats.profitFactor)],
+          ["Expectancy", `${signed(stats.expectancySol)} SOL`],
+          ["Avg win", `${stats.averageWinSol.toFixed(4)} SOL`],
+          ["Avg loss", `${stats.averageLossSol.toFixed(4)} SOL`],
+          ["Max drawdown", `${stats.maxDrawdownPct.toFixed(2)}%`],
+          ["Avg hold", `${stats.averageHoldMinutes.toFixed(1)}m`],
+          ["Median hold", `${stats.medianHoldMinutes.toFixed(1)}m`],
+        ]}
+      />
+      <Table
+        headers={["Exit reason", "PnL"]}
+        rows={recordRows(stats.pnlByExitReason)}
+      />
+      <Table
+        headers={["Score bucket", "PnL"]}
+        rows={recordRows(stats.pnlByEntryScoreBucket)}
+      />
+      <Table headers={["Size", "PnL"]} rows={recordRows(stats.pnlByTradeSize)} />
+    </div>
+  );
+}
+
 function PositionsTable({ positions }: { positions: PaperPosition[] }) {
   if (positions.length === 0) {
     return <Empty label="No open positions" />;
@@ -947,7 +1140,7 @@ function CandidatesTable({ candidates }: { candidates: MarketCandidate[] }) {
 
   return (
     <Table
-      headers={["Token", "Score", "Liq", "M5 Vol", "M5", "Buys/Sells"]}
+      headers={["Token", "Score", "Liq", "M5 Vol", "M5", "Buys/Sells", "Decision"]}
       rows={candidates.map((candidate) => [
         tokenCell(candidate.symbol, candidate.tokenAddress, candidate.url),
         candidate.score.toFixed(1),
@@ -955,6 +1148,9 @@ function CandidatesTable({ candidates }: { candidates: MarketCandidate[] }) {
         dollars(candidate.volumeM5Usd),
         `${candidate.priceChangeM5Pct.toFixed(1)}%`,
         `${candidate.buysM5}/${candidate.sellsM5}`,
+        candidate.rejectionReasons.length === 0
+          ? "accepted"
+          : candidate.rejectionReasons.join(", "),
       ])}
     />
   );
@@ -1064,6 +1260,61 @@ function tokenCell(symbol: string, address: string, url?: string) {
       {content}
     </a>
   );
+}
+
+function getTickHealth(state: BotState, config: BotConfig) {
+  if (!state.lastTickAt) {
+    return {
+      label: "browser/manual mode",
+      tone: "neutral" as const,
+      isStale: true,
+    };
+  }
+
+  const ageSeconds = (Date.now() - new Date(state.lastTickAt).getTime()) / 1_000;
+  const isStale = ageSeconds > config.tickIntervalSeconds * 2;
+
+  if (isStale) {
+    return {
+      label: "stale: exits not protected",
+      tone: "red" as const,
+      isStale,
+    };
+  }
+
+  if (state.lastTickSource === "worker" || state.lastTickSource === "scheduler") {
+    return {
+      label: "live worker healthy",
+      tone: "green" as const,
+      isStale,
+    };
+  }
+
+  return {
+    label: "browser/manual mode",
+    tone: "amber" as const,
+    isStale,
+  };
+}
+
+function recordRows(record: Record<string, number>): React.ReactNode[][] {
+  const entries = Object.entries(record);
+
+  if (entries.length === 0) {
+    return [["No data", "0.0000 SOL"]];
+  }
+
+  return entries
+    .sort(([, left], [, right]) => Math.abs(right) - Math.abs(left))
+    .map(([key, value]) => [key, `${signed(value)} SOL`]);
+}
+
+function formatFactor(value: number) {
+  if (!Number.isFinite(value)) {
+    return "inf";
+  }
+
+  return value.toFixed(2);
 }
 
 function dollars(value: number) {

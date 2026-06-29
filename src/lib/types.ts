@@ -2,13 +2,21 @@ export type DiscoveryMode =
   | "latest-profiles"
   | "latest-boosts"
   | "top-boosts"
-  | "watchlist";
+  | "watchlist"
+  | "combined";
 
 export type TradeExitReason =
   | "take-profit"
   | "stop-loss"
   | "trailing-stop"
-  | "max-hold";
+  | "max-hold"
+  | "stale-quote"
+  | "no-route"
+  | "emergency-stop"
+  | "daily-drawdown-stop";
+
+export type RiskMode = "fixed" | "adaptive";
+export type TickSource = "browser" | "worker" | "scheduler";
 
 export type ActivityKind =
   | "scan"
@@ -21,26 +29,42 @@ export type ActivityKind =
 export interface BotConfig {
   startingCashSol: number;
   tradeSizeSol: number;
+  riskMode: RiskMode;
+  minTradeSizeSol: number;
+  maxTradeSizeSol: number;
+  riskPerTradePct: number;
+  scaleUpAfterTrades: number;
+  scaleUpMinProfitFactor: number;
+  maxDailyDrawdownPct: number;
   maxOpenPositions: number;
   maxNewPositionsPerTick: number;
   takeProfitNetPct: number;
   stopLossNetPct: number;
   trailingActivationPct: number;
   trailingDrawdownPct: number;
+  emergencyMaxLossPct: number;
+  staleQuoteMaxSeconds: number;
   maxHoldMinutes: number;
   cooldownMinutes: number;
   tickIntervalSeconds: number;
   slippageBps: number;
   priorityFeeLamports: number;
   baseSignatureFeeLamports: number;
-  maxPriceImpactPct: number;
+  maxEntryPriceImpactPct: number;
+  maxPriceImpactPct?: number;
   minLiquidityUsd: number;
   maxLiquidityUsd: number;
   minVolumeM5Usd: number;
-  minAgeMinutes: number;
-  maxAgeHours: number;
+  minPairAgeMinutes: number;
+  maxPairAgeHours: number;
+  minAgeMinutes?: number;
+  maxAgeHours?: number;
   minBuySellRatioM5: number;
   minBuysM5: number;
+  minScoreToEnter: number;
+  maxTradeLiquidityPct: number;
+  rejectEmojiOnlySymbols: boolean;
+  rejectDuplicateRecentToken: boolean;
   candidateLimit: number;
   discoveryMode: DiscoveryMode;
   watchlist: string[];
@@ -75,6 +99,8 @@ export interface MarketCandidate {
   source: string;
   score: number;
   reasons: string[];
+  rejectionReasons: string[];
+  accepted: boolean;
 }
 
 export interface ActivityEvent {
@@ -145,6 +171,8 @@ export interface CandidateTrainingSnapshot {
   source: string;
   score: number;
   reasons: string[];
+  rejectionReasons: string[];
+  accepted: boolean;
 }
 
 export interface TradeTrainingSnapshot {
@@ -209,12 +237,21 @@ export interface EquityPoint {
 export interface BotState {
   initializedAt: string;
   updatedAt: string;
+  lastTickAt?: string;
+  lastTickSource?: TickSource;
   cashSol: number;
   openPositions: PaperPosition[];
   closedTrades: ClosedTrade[];
   activity: ActivityEvent[];
   equityCurve: EquityPoint[];
   cooldowns: Record<string, string>;
+  peakEquitySol: number;
+  maxDrawdownPct: number;
+  dailyAnchorDate: string;
+  dailyStartEquitySol: number;
+  dailyPeakEquitySol: number;
+  dailyDrawdownPct: number;
+  drawdownLocked: boolean;
   tickCount: number;
 }
 
@@ -235,6 +272,9 @@ export interface TickResult {
     equitySol: number;
     realizedPnlSol: number;
     openPnlSol: number;
+    markedOpenValueSol: number;
+    computedTradeSizeSol: number;
+    drawdownLocked: boolean;
   };
 }
 

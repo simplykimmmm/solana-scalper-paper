@@ -45,60 +45,118 @@ type DexPair = {
   pairCreatedAt?: number;
 };
 
+const PAIR_FETCH_CONCURRENCY = 8;
+
 export async function scanDexScreener(
   config: BotConfig,
 ): Promise<MarketCandidate[]> {
   const seeds = await fetchSeeds(config);
   const uniqueSeeds = dedupeSeeds(seeds).slice(
     0,
-    Math.max(config.candidateLimit, 1),
+    Math.max(config.candidateLimit * 3, 1),
   );
-  const pairs = await Promise.all(
-    uniqueSeeds.map(async (seed) => {
+  const pairs = await mapWithConcurrency(
+    uniqueSeeds,
+    PAIR_FETCH_CONCURRENCY,
+    async (seed) => {
       try {
         return await fetchPairsForSeed(config.dexscreenerBaseUrl, seed);
       } catch {
         return [];
       }
-    }),
+    },
   );
 
   const candidates = pairs
     .flat()
     .map((pair) => normalizePair(pair))
     .filter((candidate): candidate is MarketCandidate => Boolean(candidate))
-    .filter((candidate) => passesMarketFilters(candidate, config))
+    .map((candidate) => {
+      const rejectionReasons = getMarketRejectionReasons(candidate, config);
+      return {
+        ...candidate,
+        rejectionReasons,
+        accepted: rejectionReasons.length === 0,
+      };
+    })
     .sort((a, b) => b.score - a.score);
 
   return dedupeCandidates(candidates).slice(0, config.candidateLimit);
 }
 
-function passesMarketFilters(
+export function getMarketRejectionReasons(
   candidate: MarketCandidate,
   config: BotConfig,
-): boolean {
+): string[] {
   const buySellRatio = candidate.buysM5 / Math.max(candidate.sellsM5, 1);
+  const rejectionReasons: string[] = [];
 
-  return (
-    candidate.chainId === "solana" &&
-    candidate.tokenAddress.length > 30 &&
-    candidate.liquidityUsd >= config.minLiquidityUsd &&
-    candidate.liquidityUsd <= config.maxLiquidityUsd &&
-    candidate.volumeM5Usd >= config.minVolumeM5Usd &&
-    candidate.pairAgeMinutes >= config.minAgeMinutes &&
-    candidate.pairAgeMinutes <= config.maxAgeHours * 60 &&
-    candidate.buysM5 >= config.minBuysM5 &&
-    buySellRatio >= config.minBuySellRatioM5
-  );
+  if (candidate.chainId !== "solana") {
+    rejectionReasons.push("not-solana");
+  }
+
+  if (candidate.tokenAddress.length <= 30) {
+    rejectionReasons.push("invalid-token");
+  }
+
+  if (candidate.score < config.minScoreToEnter) {
+    rejectionReasons.push("low-score");
+  }
+
+  if (candidate.liquidityUsd < config.minLiquidityUsd) {
+    rejectionReasons.push("low-liquidity");
+  }
+
+  if (candidate.liquidityUsd > config.maxLiquidityUsd) {
+    rejectionReasons.push("too-large-liquidity");
+  }
+
+  if (candidate.volumeM5Usd < config.minVolumeM5Usd) {
+    rejectionReasons.push("low-volume");
+  }
+
+  if (candidate.pairAgeMinutes < config.minPairAgeMinutes) {
+    rejectionReasons.push("too-new");
+  }
+
+  if (candidate.pairAgeMinutes > config.maxPairAgeHours * 60) {
+    rejectionReasons.push("too-old");
+  }
+
+  if (candidate.buysM5 < config.minBuysM5) {
+    rejectionReasons.push("low-buys");
+  }
+
+  if (buySellRatio < config.minBuySellRatioM5) {
+    rejectionReasons.push("low-buy-pressure");
+  }
+
+  if (config.rejectEmojiOnlySymbols && !/[a-z0-9]/i.test(candidate.symbol)) {
+    rejectionReasons.push("emoji-only-symbol");
+  }
+
+  return rejectionReasons;
 }
 
 async function fetchSeeds(config: BotConfig): Promise<DexTokenSeed[]> {
+  const watchlistSeeds = config.watchlist.map((tokenAddress) => ({
+    chainId: "solana",
+    tokenAddress,
+    source: "watchlist",
+  }));
+
   if (config.discoveryMode === "watchlist") {
-    return config.watchlist.map((tokenAddress) => ({
-      chainId: "solana",
-      tokenAddress,
-      source: "watchlist",
-    }));
+    return watchlistSeeds;
+  }
+
+  if (config.discoveryMode === "combined") {
+    const [latestProfiles, latestBoosts, topBoosts] = await Promise.all([
+      fetchDiscoveryEndpoint(config, "/token-profiles/latest/v1", "latest-profiles"),
+      fetchDiscoveryEndpoint(config, "/token-boosts/latest/v1", "latest-boosts"),
+      fetchDiscoveryEndpoint(config, "/token-boosts/top/v1", "top-boosts"),
+    ]);
+
+    return [...latestProfiles, ...latestBoosts, ...topBoosts, ...watchlistSeeds];
   }
 
   const endpoint =
@@ -107,6 +165,15 @@ async function fetchSeeds(config: BotConfig): Promise<DexTokenSeed[]> {
       : config.discoveryMode === "latest-boosts"
         ? "/token-boosts/latest/v1"
         : "/token-profiles/latest/v1";
+
+  return fetchDiscoveryEndpoint(config, endpoint, config.discoveryMode);
+}
+
+async function fetchDiscoveryEndpoint(
+  config: BotConfig,
+  endpoint: string,
+  source: string,
+): Promise<DexTokenSeed[]> {
   const data = await fetchJson<DexTokenSeed[]>(
     `${trimSlash(config.dexscreenerBaseUrl)}${endpoint}`,
   );
@@ -114,7 +181,7 @@ async function fetchSeeds(config: BotConfig): Promise<DexTokenSeed[]> {
   return Array.isArray(data)
     ? data
         .filter((item) => item.chainId === "solana" && item.tokenAddress)
-        .map((item) => ({ ...item, source: config.discoveryMode }))
+        .map((item) => ({ ...item, source }))
     : [];
 }
 
@@ -213,6 +280,8 @@ function normalizePair(pair: DexPair): MarketCandidate | null {
     source: pair.dexId || "dexscreener",
     score: Math.round(score * 10) / 10,
     reasons,
+    rejectionReasons: [],
+    accepted: false,
   };
 }
 
@@ -273,6 +342,29 @@ function dedupeCandidates(candidates: MarketCandidate[]): MarketCandidate[] {
   }
 
   return unique;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await mapper(items[index]);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
+  );
+
+  return results;
 }
 
 function trimSlash(value: string): string {
