@@ -24,7 +24,7 @@ Open [http://localhost:3000](http://localhost:3000).
 - Appends scan, entry, exit, win, and loss rows to an AI-ready JSONL log.
 - Stores state in browser local storage by default.
 - Optionally persists server-side state in Upstash Redis REST for cloud scheduler ticks.
-- Includes a Vercel Cron fallback for cloud ticks after the browser tab is closed.
+- Uses Cloudflare Workers Cron for cloud ticks after the browser tab is closed.
 - Includes a GitHub Actions scheduler fallback for free, delayed cloud ticks.
 - Includes a continuous Node paper worker for faster stop-loss and max-hold enforcement.
 
@@ -67,9 +67,7 @@ The dashboard Start button runs only while the browser tab is open.
 There are now two cloud runners:
 
 1. **Always-on worker**: use this for the real 10-second paper loop.
-2. **Vercel Cron**: use this as a cloud fallback. It runs from Vercel production,
-   not from the browser, but cron timing is minute-level rather than continuous.
-3. **Cloudflare Worker Cron**: no-card fallback that runs once per minute and
+2. **Cloudflare Worker Cron**: no-card fallback that runs once per minute and
    calls `/api/tick` 6 times with 10 seconds between calls.
 
 Both runners use the same Upstash state and a Redis tick lock, so overlapping
@@ -104,27 +102,11 @@ pnpm paper:worker:dry
 Keep the Vercel dashboard deployed separately. The worker only runs the paper
 engine and writes state back to Upstash.
 
-### Vercel Cron Fallback
+### Vercel Dashboard/API
 
-`vercel.json` includes this production cron:
-
-```json
-{
-  "path": "/api/tick",
-  "schedule": "* * * * *"
-}
-```
-
-It calls `GET /api/tick`, which loads cloud state, runs one server-side paper
-tick, saves state, and appends training rows. Set the same Upstash vars and
-`CRON_SECRET` on Vercel. Vercel sends the secret as:
-
-```text
-Authorization: Bearer YOUR_CRON_SECRET
-```
-
-If your Vercel plan does not allow every-minute cron, use the Render worker as
-the primary runner and remove or lower the cron schedule.
+Vercel hosts the dashboard and `/api/tick`, but Vercel Cron is intentionally not
+enabled in `vercel.json`. Hobby accounts only allow daily cron jobs, which is too
+slow for this paper scalper. Cloudflare calls the Vercel API route instead.
 
 ### Cloudflare Worker No-Card Fallback
 

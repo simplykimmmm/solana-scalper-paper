@@ -3,11 +3,5 @@
   "framework": "nextjs",
   "buildCommand": "npm run build",
   "installCommand": "npm install",
-  "outputDirectory": null,
-  "crons": [
-    {
-      "path": "/api/tick",
-      "schedule": "* * * * *"
-    }
-  ]
+  "outputDirectory": null
 }
