@@ -30,8 +30,8 @@ jobs:
         env:
           TICK_URL: ${{ vars.PAPER_TICK_URL || 'https://solana-scalper-paper.vercel.app/api/tick' }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          REQUESTED_TICKS: ${{ github.event.inputs.ticks || '1' }}
-          REQUESTED_DELAY_SECONDS: ${{ github.event.inputs.delay_seconds || '30' }}
+          REQUESTED_TICKS: ${{ github.event.inputs.ticks || '30' }}
+          REQUESTED_DELAY_SECONDS: ${{ github.event.inputs.delay_seconds || '10' }}
         run: |
           set -euo pipefail
 
@@ -48,8 +48,8 @@ jobs:
 
           if (( ticks < 1 )); then
             ticks=1
-          elif (( ticks > 20 )); then
-            ticks=20
+          elif (( ticks > 30 )); then
+            ticks=30
           fi
 
           if (( delay_seconds < 5 )); then

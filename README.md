@@ -124,9 +124,10 @@ Authorization: Bearer YOUR_CRON_SECRET
 If your Vercel plan does not allow every-minute cron, use the Render worker as
 the primary runner and remove or lower the cron schedule.
 
-The repo also includes `.github/workflows/cloud-paper-tick.yml`, which calls the
-production `/api/tick` endpoint every 5 minutes. GitHub can delay scheduled jobs,
-so treat this as a free fallback runner, not a precise second-by-second process.
+The repo also includes `.github/workflows/cloud-paper-tick.yml`, which runs from
+GitHub Actions every 5 minutes and, by default, calls the production `/api/tick`
+endpoint 30 times with 10 seconds between calls. GitHub can delay or skip
+scheduled jobs, so treat this as a free fallback runner, not a true uptime SLA.
 
 If `CRON_SECRET` is set on Vercel, add the same value as a GitHub Actions secret
 named `CRON_SECRET`. The workflow uses this endpoint by default:
