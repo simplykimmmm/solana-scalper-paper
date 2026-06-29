@@ -7,8 +7,6 @@ import {
   Cloud,
   Database,
   Download,
-  Pause,
-  Play,
   RefreshCw,
   RotateCcw,
   Save,
@@ -42,7 +40,6 @@ type ApiStateResponse = {
 };
 
 const LOCAL_KEY = "solana-scalper-paper:v1";
-const RUNNING_KEY = "solana-scalper-paper:engine-running";
 const TRAINING_LOG_LOCAL_KEY = "solana-scalper-paper:training-log";
 const DASHBOARD_REFRESH_MS = 5_000;
 const TRAINING_LOG_LOCAL_LIMIT = 20_000;
@@ -52,15 +49,12 @@ export function Dashboard() {
   const [state, setState] = useState<BotState>(() => createHydrationState());
   const [candidates, setCandidates] = useState<MarketCandidate[]>([]);
   const [summary, setSummary] = useState<TickResult["summary"] | null>(null);
-  const [isRunning, setIsRunning] = useState(false);
   const [isTicking, setIsTicking] = useState(false);
   const [hasLoadedPreferences, setHasLoadedPreferences] = useState(false);
   const [storageConfigured, setStorageConfigured] = useState(false);
   const [saveCloudState, setSaveCloudState] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const refreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const isRunningRef = useRef(isRunning);
   const isTickingRef = useRef(isTicking);
 
   const syncCloudState = useCallback(async () => {
@@ -76,19 +70,13 @@ export function Dashboard() {
 
       if (data.storageConfigured && data.payload) {
         setState(data.payload.state);
-        setConfig((currentConfig) =>
-          isRunningRef.current ? currentConfig : data.payload.config,
-        );
+        setConfig(data.payload.config);
         setSaveCloudState(true);
       }
     } catch {
       // Keep the current dashboard state when a refresh request is briefly unavailable.
     }
   }, []);
-
-  useEffect(() => {
-    isRunningRef.current = isRunning;
-  }, [isRunning]);
 
   useEffect(() => {
     isTickingRef.current = isTicking;
@@ -99,7 +87,6 @@ export function Dashboard() {
       const localPayload = readLocalPayload();
       setConfig(localPayload.config);
       setState(localPayload.state);
-      setIsRunning(readLocalRunningState());
       setHasLoadedPreferences(true);
     }, 0);
 
@@ -122,14 +109,6 @@ export function Dashboard() {
       }),
     );
   }, [config, state]);
-
-  useEffect(() => {
-    if (!hasLoadedPreferences) {
-      return;
-    }
-
-    window.localStorage.setItem(RUNNING_KEY, isRunning ? "1" : "0");
-  }, [hasLoadedPreferences, isRunning]);
 
   const metrics = useMemo(() => {
     const stats = computeTradeStats(state);
@@ -186,31 +165,10 @@ export function Dashboard() {
       appendLocalTrainingRows(result.trainingRows);
     } catch (tickError) {
       setError(tickError instanceof Error ? tickError.message : "Tick failed.");
-      setIsRunning(false);
     } finally {
       setIsTicking(false);
     }
   }, [config, isTicking, saveCloudState, state]);
-
-  useEffect(() => {
-    if (!hasLoadedPreferences || !isRunning) {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-      return;
-    }
-
-    intervalRef.current = setInterval(() => {
-      void runTick();
-    }, config.tickIntervalSeconds * 1_000);
-
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
-    };
-  }, [config.tickIntervalSeconds, hasLoadedPreferences, isRunning, runTick]);
 
   useEffect(() => {
     if (!hasLoadedPreferences) {
@@ -265,7 +223,6 @@ export function Dashboard() {
     setState(nextState);
     setCandidates([]);
     setSummary(null);
-    setIsRunning(false);
   }
 
   function exportState() {
@@ -339,13 +296,6 @@ export function Dashboard() {
               Paper only
             </Badge>
             <Badge tone={tickHealth.tone}>{tickHealth.label}</Badge>
-            <IconButton
-              label={isRunning ? "Pause browser ticks" : "Start browser ticks"}
-              onClick={() => setIsRunning((value) => !value)}
-              tone={isRunning ? "amber" : "green"}
-            >
-              {isRunning ? <Pause size={18} /> : <Play size={18} />}
-            </IconButton>
             <IconButton label="Run one tick" onClick={() => void runTick()}>
               <RefreshCw className={isTicking ? "animate-spin" : ""} size={18} />
             </IconButton>
@@ -701,14 +651,13 @@ export function Dashboard() {
                 : "Add Upstash env vars on Vercel for server-side ticks."}
             </p>
             <p className="mt-2 text-sm leading-6 text-[#5d6554]">
-              Browser ticks are manual/local and can stop when the tab is closed.
-              Vercel Cron is a cloud fallback. Use the always-on worker for the
-              10-second exit loop.
+              Cloudflare runs the paper ticker from the cloud. This dashboard is
+              for monitoring, settings, exports, and one-off manual ticks.
             </p>
             {tickHealth.isStale ? (
               <div className="mt-3 rounded-[6px] border border-[#e4a5a5] bg-[#fff4f1] px-3 py-2 text-sm text-[#8d2525]">
-                Last tick is stale. Exits are not protected until a cloud worker,
-                cron tick, or manual tick runs.
+                Last tick is stale. Exits are not protected until Cloudflare or a
+                manual tick runs.
               </div>
             ) : null}
             {state.drawdownLocked ? (
@@ -789,14 +738,6 @@ export function Dashboard() {
       </div>
     </main>
   );
-}
-
-function readLocalRunningState(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  return window.localStorage.getItem(RUNNING_KEY) === "1";
 }
 
 function readLocalPayload(): ApiStateResponse["payload"] {

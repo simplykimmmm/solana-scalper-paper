@@ -60,7 +60,8 @@ JUPITER_API_KEY=
 PAPER_WORKER_INTERVAL_SECONDS=10
 ```
 
-The dashboard Start button runs only while the browser tab is open.
+The dashboard does not run a continuous browser loop. It monitors cloud state,
+edits settings, exports logs, and can run one manual tick for testing.
 
 ## Cloud 24/7 Mode
 
