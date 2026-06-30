@@ -338,6 +338,9 @@ export function Dashboard() {
             <Badge tone={tradingEnabled ? "green" : "amber"}>
               {tradingEnabled ? "Entries on" : "Entries paused"}
             </Badge>
+            {config.unlimitedTradeCount ? (
+              <Badge tone="green">Count uncapped</Badge>
+            ) : null}
             <IconButton
               disabled={isSavingControl}
               label={tradingEnabled ? "Pause cloud entries" : "Start cloud entries"}
@@ -443,6 +446,7 @@ export function Dashboard() {
                 value={config.maxOpenPositions}
                 min={1}
                 step={1}
+                disabled={config.unlimitedTradeCount}
                 onChange={(value) => updateConfig("maxOpenPositions", value)}
               />
               <NumberField
@@ -450,6 +454,7 @@ export function Dashboard() {
                 value={config.maxNewPositionsPerTick}
                 min={0}
                 step={1}
+                disabled={config.unlimitedTradeCount}
                 onChange={(value) =>
                   updateConfig("maxNewPositionsPerTick", value)
                 }
@@ -542,6 +547,17 @@ export function Dashboard() {
                 <option value="adaptive">Adaptive</option>
                 <option value="fixed">Fixed</option>
               </select>
+            </label>
+            <label className="mt-3 flex items-center justify-between gap-3 text-sm font-medium">
+              Unlimited trade count
+              <input
+                className="size-5 accent-[#1d7a50]"
+                type="checkbox"
+                checked={config.unlimitedTradeCount}
+                onChange={(event) =>
+                  updateConfig("unlimitedTradeCount", event.target.checked)
+                }
+              />
             </label>
           </Panel>
 

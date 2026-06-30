@@ -3,6 +3,7 @@ import test from "node:test";
 import { createInitialState, normalizeConfig } from "./defaults";
 import {
   calculateEquitySol,
+  computeEntrySlots,
   computeTradeSizeSol,
   ensureRiskState,
   estimateInitialExitSol,
@@ -130,6 +131,38 @@ test("daily drawdown prevents new entries but still allows exits", () => {
 test("trading enabled defaults on and preserves explicit pause", () => {
   assert.equal(normalizeConfig({}).tradingEnabled, true);
   assert.equal(normalizeConfig({ tradingEnabled: false }).tradingEnabled, false);
+});
+
+test("unlimited trade count ignores count caps but keeps candidate limit", () => {
+  const state = createInitialState({ startingCashSol: 10 });
+  state.openPositions = Array.from({ length: 10 }, (_, index) =>
+    makePosition({ id: `position-${index}` }),
+  );
+
+  assert.equal(
+    computeEntrySlots(
+      {
+        unlimitedTradeCount: true,
+        candidateLimit: 42,
+        maxOpenPositions: 3,
+        maxNewPositionsPerTick: 1,
+      },
+      state,
+    ),
+    42,
+  );
+  assert.equal(
+    computeEntrySlots(
+      {
+        unlimitedTradeCount: false,
+        candidateLimit: 42,
+        maxOpenPositions: 3,
+        maxNewPositionsPerTick: 1,
+      },
+      state,
+    ),
+    0,
+  );
 });
 
 function makePosition(overrides: Partial<PaperPosition> = {}): PaperPosition {

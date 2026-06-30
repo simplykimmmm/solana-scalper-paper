@@ -28,6 +28,7 @@ export type ActivityKind =
 
 export interface BotConfig {
   tradingEnabled: boolean;
+  unlimitedTradeCount: boolean;
   startingCashSol: number;
   tradeSizeSol: number;
   riskMode: RiskMode;

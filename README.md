@@ -22,6 +22,8 @@ Open [http://localhost:3000](http://localhost:3000).
 - Runs from the browser dashboard or a server-side `/api/tick` endpoint.
 - Lets the dashboard Play/Pause button start or pause cloud entries without
   stopping protective exit ticks.
+- Supports an unlimited trade count mode that removes only the max-open and
+  new-per-tick caps while keeping filters, cash, sizing, and exits active.
 - Refreshes cloud dashboard state every 5 seconds while the page is open.
 - Appends scan, entry, exit, win, and loss rows to an AI-ready JSONL log.
 - Stores state in browser local storage by default.
@@ -188,7 +190,8 @@ The default is intentionally safer than the earlier 1 SOL experiments:
 - Max default paper size: `0.15 SOL`.
 - Risk per trade: `1%`.
 - Scale-up requires at least `50` closed trades and profit factor above `1.4`.
-- Max open positions: `3`.
+- Trade count cap: off by default; candidate scans, cash, sizing, filters, and
+  exits still limit entries.
 - Take profit: `+4.5%` net after modeled fees.
 - Stop loss: `-3.5%` net after modeled fees.
 - Emergency stop: `-8%`.

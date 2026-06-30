@@ -19,6 +19,7 @@ import {
   calculateMarkedOpenValueSol,
   calculateOpenPnlSol,
   calculateRealizedPnlSol,
+  computeEntrySlots,
   closePosition,
   computeTradeSizeSol,
   ensureRiskState,
@@ -177,10 +178,7 @@ export async function runPaperTick(input: {
 
   let computedTradeSizeSol = computeTradeSizeSol(config, state);
   const drawdownLocked = isDailyDrawdownLocked(state, config);
-  const slots = Math.min(
-    config.maxOpenPositions - state.openPositions.length,
-    config.maxNewPositionsPerTick,
-  );
+  const slots = computeEntrySlots(config, state);
 
   if (drawdownLocked) {
     activity.unshift(

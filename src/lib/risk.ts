@@ -45,6 +45,24 @@ export function computeTradeSizeSol(
   return roundSol(clamp(riskSized, config.minTradeSizeSol, config.maxTradeSizeSol));
 }
 
+export function computeEntrySlots(
+  configInput: Partial<BotConfig>,
+  state: BotState,
+): number {
+  const config = normalizeConfig(configInput);
+
+  if (config.unlimitedTradeCount) {
+    return config.candidateLimit;
+  }
+
+  const openSlots = Math.max(
+    0,
+    config.maxOpenPositions - state.openPositions.length,
+  );
+
+  return Math.min(openSlots, config.maxNewPositionsPerTick);
+}
+
 export function getExitReason(
   position: PaperPosition,
   configInput: Partial<BotConfig>,
