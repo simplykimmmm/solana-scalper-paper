@@ -4,6 +4,7 @@ export const SOL_MINT = "So11111111111111111111111111111111111111112";
 export const LAMPORTS_PER_SOL = 1_000_000_000;
 
 export const DEFAULT_CONFIG: BotConfig = {
+  tradingEnabled: true,
   startingCashSol: 10,
   tradeSizeSol: 0.05,
   riskMode: "adaptive",
@@ -132,6 +133,7 @@ export function normalizeConfig(input: Partial<BotConfig> = {}): BotConfig {
 
   return {
     ...config,
+    tradingEnabled: config.tradingEnabled !== false,
     startingCashSol: clampNumber(config.startingCashSol, 0.01, 1_000_000),
     tradeSizeSol: clampNumber(config.tradeSizeSol, minTradeSizeSol, maxTradeSizeSol),
     riskMode: config.riskMode === "fixed" ? "fixed" : "adaptive",

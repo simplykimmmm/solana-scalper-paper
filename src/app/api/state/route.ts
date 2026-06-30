@@ -15,10 +15,15 @@ export async function GET() {
   const payload = await readCloudPayload();
 
   if (payload) {
+    const config = normalizeConfig(payload.config);
+
     return Response.json({
       ok: true,
       storageConfigured,
-      payload,
+      payload: {
+        config,
+        state: payload.state,
+      } satisfies StoredPayload,
     });
   }
 

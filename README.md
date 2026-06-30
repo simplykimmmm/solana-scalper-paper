@@ -20,6 +20,8 @@ Open [http://localhost:3000](http://localhost:3000).
 - Models conservative fills using `otherAmountThreshold` where Jupiter returns it.
 - Subtracts configurable base signature fees and priority fees from PnL.
 - Runs from the browser dashboard or a server-side `/api/tick` endpoint.
+- Lets the dashboard Play/Pause button start or pause cloud entries without
+  stopping protective exit ticks.
 - Refreshes cloud dashboard state every 5 seconds while the page is open.
 - Appends scan, entry, exit, win, and loss rows to an AI-ready JSONL log.
 - Stores state in browser local storage by default.
@@ -61,7 +63,10 @@ PAPER_WORKER_INTERVAL_SECONDS=10
 ```
 
 The dashboard does not run a continuous browser loop. It monitors cloud state,
-edits settings, exports logs, and can run one manual tick for testing.
+edits settings, exports logs, and can run one manual tick for testing. The
+Play/Pause button saves `tradingEnabled` to cloud state: Play allows new paper
+entries on the next Cloudflare tick, while Pause blocks new entries but still
+allows stop-loss, max-hold, stale-quote, and other exits to run.
 
 ## Cloud 24/7 Mode
 

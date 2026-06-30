@@ -197,6 +197,18 @@ export async function runPaperTick(input: {
         message: "Daily drawdown lock active.",
       }),
     );
+  } else if (!config.tradingEnabled) {
+    activity.unshift(
+      createActivity("skip", "Cloud trading is paused. Exits still run."),
+    );
+    trainingRows.push(
+      createSkipTrainingRow({
+        tick: state.tickCount,
+        config,
+        state,
+        message: "Cloud trading is paused. Exits still run.",
+      }),
+    );
   } else if (
     slots > 0 &&
     state.cashSol >= computedTradeSizeSol + estimatedTxFeeSol(config)

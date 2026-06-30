@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createInitialState } from "./defaults";
+import { createInitialState, normalizeConfig } from "./defaults";
 import {
   calculateEquitySol,
   computeTradeSizeSol,
@@ -111,6 +111,7 @@ test("equity does not drop by full position size immediately after entry", () =>
 test("daily drawdown prevents new entries but still allows exits", () => {
   const state = createInitialState({ startingCashSol: 10 });
   state.cashSol = 9.4;
+  state.dailyAnchorDate = "2026-06-29";
   state.dailyStartEquitySol = 10;
   state.dailyPeakEquitySol = 10;
   const updated = ensureRiskState(
@@ -124,6 +125,11 @@ test("daily drawdown prevents new entries but still allows exits", () => {
     getExitReason(makePosition({ currentNetPnlPct: -3.6 }), {}, new Date()),
     "stop-loss",
   );
+});
+
+test("trading enabled defaults on and preserves explicit pause", () => {
+  assert.equal(normalizeConfig({}).tradingEnabled, true);
+  assert.equal(normalizeConfig({ tradingEnabled: false }).tradingEnabled, false);
 });
 
 function makePosition(overrides: Partial<PaperPosition> = {}): PaperPosition {

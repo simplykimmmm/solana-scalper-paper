@@ -7,6 +7,8 @@ import {
   Cloud,
   Database,
   Download,
+  Pause,
+  Play,
   RefreshCw,
   RotateCcw,
   Save,
@@ -17,7 +19,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { computeTradeStats } from "@/lib/analytics";
-import { DEFAULT_CONFIG, createInitialState } from "@/lib/defaults";
+import { DEFAULT_CONFIG, createInitialState, normalizeConfig } from "@/lib/defaults";
 import { computeTradeSizeSol } from "@/lib/risk";
 import type {
   ActivityEvent,
@@ -30,13 +32,20 @@ import type {
   TickResult,
 } from "@/lib/types";
 
+type ApiStatePayload = {
+  config: BotConfig;
+  state: BotState;
+};
+
 type ApiStateResponse = {
   ok: boolean;
   storageConfigured: boolean;
-  payload: {
-    config: BotConfig;
-    state: BotState;
-  };
+  payload?: ApiStatePayload;
+};
+
+type ApiStateSaveResponse = ApiStateResponse & {
+  saved?: boolean;
+  error?: string;
 };
 
 const LOCAL_KEY = "solana-scalper-paper:v1";
@@ -53,6 +62,7 @@ export function Dashboard() {
   const [hasLoadedPreferences, setHasLoadedPreferences] = useState(false);
   const [storageConfigured, setStorageConfigured] = useState(false);
   const [saveCloudState, setSaveCloudState] = useState(false);
+  const [isSavingControl, setIsSavingControl] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const refreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isTickingRef = useRef(isTicking);
@@ -130,6 +140,7 @@ export function Dashboard() {
   }, [config, state, summary]);
 
   const tickHealth = useMemo(() => getTickHealth(state, config), [state, config]);
+  const tradingEnabled = config.tradingEnabled !== false;
 
   const runTick = useCallback(async () => {
     if (isTicking) {
@@ -197,25 +208,53 @@ export function Dashboard() {
   async function saveState() {
     setError(null);
 
-    const response = await fetch("/api/state", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ config, state }),
-    });
-    const data = (await response.json()) as {
-      storageConfigured: boolean;
-      error?: string;
-    };
+    try {
+      const data = await saveCloudPayload(config, state);
+      setStorageConfigured(data.storageConfigured);
+      setSaveCloudState(data.storageConfigured);
 
-    if (!response.ok) {
-      setError(data.error || "Save failed.");
+      if (data.payload) {
+        setConfig(data.payload.config);
+        setState(data.payload.state);
+      }
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Save failed.");
+    }
+  }
+
+  async function toggleCloudTrading() {
+    if (isSavingControl) {
       return;
     }
 
-    setStorageConfigured(data.storageConfigured);
-    setSaveCloudState(data.storageConfigured);
+    setIsSavingControl(true);
+    setError(null);
+
+    const nextConfig = {
+      ...config,
+      tradingEnabled: !tradingEnabled,
+    };
+    setConfig(nextConfig);
+
+    try {
+      const data = await saveCloudPayload(nextConfig, state);
+      setStorageConfigured(data.storageConfigured);
+      setSaveCloudState(data.storageConfigured);
+
+      if (data.payload) {
+        setConfig(data.payload.config);
+        setState(data.payload.state);
+      }
+    } catch (controlError) {
+      setConfig(config);
+      setError(
+        controlError instanceof Error
+          ? controlError.message
+          : "Cloud control failed.",
+      );
+    } finally {
+      setIsSavingControl(false);
+    }
   }
 
   function resetState() {
@@ -296,6 +335,17 @@ export function Dashboard() {
               Paper only
             </Badge>
             <Badge tone={tickHealth.tone}>{tickHealth.label}</Badge>
+            <Badge tone={tradingEnabled ? "green" : "amber"}>
+              {tradingEnabled ? "Entries on" : "Entries paused"}
+            </Badge>
+            <IconButton
+              disabled={isSavingControl}
+              label={tradingEnabled ? "Pause cloud entries" : "Start cloud entries"}
+              onClick={() => void toggleCloudTrading()}
+              tone={tradingEnabled ? "amber" : "green"}
+            >
+              {tradingEnabled ? <Pause size={18} /> : <Play size={18} />}
+            </IconButton>
             <IconButton label="Run one tick" onClick={() => void runTick()}>
               <RefreshCw className={isTicking ? "animate-spin" : ""} size={18} />
             </IconButton>
@@ -652,8 +702,14 @@ export function Dashboard() {
             </p>
             <p className="mt-2 text-sm leading-6 text-[#5d6554]">
               Cloudflare runs the paper ticker from the cloud. This dashboard is
-              for monitoring, settings, exports, and one-off manual ticks.
+              for monitoring, settings, exports, and one-off manual ticks. The
+              Play/Pause control only allows or blocks new entries; exits still run.
             </p>
+            {!tradingEnabled ? (
+              <div className="mt-3 rounded-[6px] border border-[#e6c76f] bg-[#fff6d8] px-3 py-2 text-sm text-[#7c5a05]">
+                Entries are paused. Cloud ticks can still close open positions.
+              </div>
+            ) : null}
             {tickHealth.isStale ? (
               <div className="mt-3 rounded-[6px] border border-[#e4a5a5] bg-[#fff4f1] px-3 py-2 text-sm text-[#8d2525]">
                 Last tick is stale. Exits are not protected until Cloudflare or a
@@ -740,7 +796,7 @@ export function Dashboard() {
   );
 }
 
-function readLocalPayload(): ApiStateResponse["payload"] {
+function readLocalPayload(): ApiStatePayload {
   const fallback = {
     config: DEFAULT_CONFIG,
     state: createInitialState(DEFAULT_CONFIG),
@@ -757,11 +813,37 @@ function readLocalPayload(): ApiStateResponse["payload"] {
   }
 
   try {
-    return JSON.parse(local) as ApiStateResponse["payload"];
+    const parsed = JSON.parse(local) as Partial<ApiStatePayload>;
+    const config = normalizeConfig(parsed.config);
+
+    return {
+      config,
+      state: parsed.state || createInitialState(config),
+    };
   } catch {
     window.localStorage.removeItem(LOCAL_KEY);
     return fallback;
   }
+}
+
+async function saveCloudPayload(
+  config: BotConfig,
+  state: BotState,
+): Promise<ApiStateSaveResponse> {
+  const response = await fetch("/api/state", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ config, state }),
+  });
+  const data = (await response.json()) as ApiStateSaveResponse;
+
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || "Save failed.");
+  }
+
+  return data;
 }
 
 function appendLocalTrainingRows(rows: TrainingLogRow[]) {
@@ -909,11 +991,13 @@ function Badge({
 function IconButton({
   label,
   tone = "neutral",
+  disabled = false,
   onClick,
   children,
 }: {
   label: string;
   tone?: "neutral" | "green" | "amber" | "red";
+  disabled?: boolean;
   onClick: () => void;
   children: React.ReactNode;
 }) {
@@ -928,7 +1012,8 @@ function IconButton({
     <button
       aria-label={label}
       title={label}
-      className={`grid size-9 place-items-center rounded-[6px] border transition ${classes[tone]}`}
+      className={`grid size-9 place-items-center rounded-[6px] border transition disabled:cursor-not-allowed disabled:opacity-60 ${classes[tone]}`}
+      disabled={disabled}
       onClick={onClick}
       type="button"
     >

@@ -27,6 +27,7 @@ export type ActivityKind =
   | "state";
 
 export interface BotConfig {
+  tradingEnabled: boolean;
   startingCashSol: number;
   tradeSizeSol: number;
   riskMode: RiskMode;
